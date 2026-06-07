@@ -1,0 +1,46 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Generated logs and temporary files
+logs/
+tmp/
+*.log
+
+# Generated CS4M artifacts
+backups/
+outputs/cache/
+outputs/models/
+outputs/results/
+*.memmap
+
+# Broken/local git recovery backups
+.git_broken_backup_*/
+
+# Large models, checkpoints, and numeric arrays
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Local editor/OS files
+.DS_Store
+.idea/
+.vscode/

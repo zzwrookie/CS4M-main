@@ -1,0 +1,96 @@
+# TFLR-CSSM canonical unified config.
+#
+# Purpose:
+#   Paper-facing, leakage-free streaming node-alert candidate.
+#
+# Parameter policy:
+#   Keep the main method small. Only `paper_parameters` should be discussed as
+#   method-level choices. `implementation_defaults` are fixed resource/runtime
+#   constants for reproducibility and deployment, not dataset-tuned detection
+#   hyperparameters.
+
+method: TFLR_CSSM_UNIFIED
+entry_point: legacy/tools/run_tflr_cssm_unified.py
+profile: evidence_conjunction_tail_rank8
+
+paper_parameters:
+  rank: 8
+  alert_threshold_source: validation_node_online_risk_quantile
+  alert_threshold_quantile: 0.999
+  risk_decay_sec: 3600
+  activity_regularization:
+    weight: 0.20
+    margin: 0.50
+    cap: 2.0
+  state_budget:
+    active_node_budget: 200000
+    node_state_ttl_sec: 86400
+
+implementation_defaults:
+  predictor:
+    direct_lowrank_enabled: true
+    direct_lowrank_iters: 5
+    direct_lowrank_l2: 0.01
+    latent_dim: 32
+    max_tokens: 12
+    posthoc_svd_enabled: false
+  streaming_storage:
+    vector_cache_size: 200000
+    semantic_buckets: 131072
+    edge_sketch_size: 131072
+    chain_sketch_size: 65536
+    memory_prototype_count: 1024
+  evidence_calibration:
+    node_rerank_feature_weights: [0.60, 0.10, 0.10, 0.80, 0.90, 0.15, 0.30, 0.90, 0.50, 1.00, 1.20]
+    semantic_rarity_is_intrinsic_not_causal_support: true
+    stored_model_budget_mb: 5
+    diagnostic_rank16_sketch16_status: disabled_after_clearscope_full_regression
+  online_state_maintenance:
+    node_state_maintenance_interval: 65536
+    node_state_eviction_batch: 4096
+  diagnostics:
+    node_postprocess_cache_enabled_by_default: false
+    prefix_sweep_is_diagnostic_only: true
+    profiling_interval_events: 0
+  activity_normalized_chain:
+    enabled_by_default: false
+    status: diagnostic_disabled_after_clearscope_full_no_improvement
+    definition: max_past_chain_profile_raw_t(v) / max(1, log1p(high_count_t(v)))
+    leakage_policy: validation-calibrated; test density accumulated causally; final boost applies only to forensic candidate band
+    reason: CLEARSCOPE_E3_TFLR_ACTIVITY_CHAIN_FULL had applied_nodes=0 and did not improve low-FP, top3000, full-recall, or online alert metrics.
+  causal_episode_support:
+    enabled_by_default: false
+    selective_enabled: false
+    min_event_tail: 1.0
+    min_chain: 1.0
+    min_assoc: 1.0
+    min_families: 2
+    status: diagnostic_disabled_after_full_validation
+    reason: V3_FAST_SELECTIVE saturated CLEARSCOPE benign high-activity nodes and added runtime without improving top-k ranking.
+  precompute_cache:
+    enabled_by_default: false
+    mode: auto
+    default_path_policy: outputs/results/cs4m/precompute_cache/<dataset>_<config_fingerprint>.pkl
+
+fixed_main_components:
+  online_node_alerts_enabled: true
+  chain_profile_enabled: true
+  compact_malicious_chain_enabled: true
+  causal_episode_support_enabled: false
+  causal_episode_selective_enabled: false
+  adaptive_memory_enabled: true
+  node_rerank_enabled: true
+  node_rerank_joint_activity_pressure: false
+  node_rank_mode: intrinsic_first
+  evidence_band_gate_enabled: false
+  mid_rank_gate_enabled: true
+  local_closure_enabled: false
+  snc_enabled: false
+
+leakage_check:
+  train_uses_ground_truth: false
+  validation_uses_ground_truth: false
+  test_labels_used_before_emission: false
+  test_rankings_used_before_emission: false
+  full_test_statistics_used_before_emission: false
+  dataset_specific_rescue_rules: false

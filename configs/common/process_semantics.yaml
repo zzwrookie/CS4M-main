@@ -1,0 +1,35 @@
+process_semantic_rules_version: v1
+
+dataset_os_profile:
+  CADETS_E3: freebsd
+  CADETS_E5: freebsd
+  CLEARSCOPE_E3: android
+  CLEARSCOPE_E5: android
+  THEIA_E3: linux
+  THEIA_E5: linux
+  TRACE_*: linux
+  FIVEDIRECTIONS_*: windows
+  TA5_2_*: windows
+
+process_nll_max_tokens: 6
+process_residual_max_tokens: 8
+path_parent_depth: 1
+package_namespace_segments: 2
+package_component_index: 2
+semantic_sketch_latent_dim: 64
+semantic_sketch_max_tokens: 48
+file_nll_max_tokens: 8
+
+process_semantic_audit_sample_limit: 5000
+process_semantic_audit_target_limit_per_pattern: 50
+process_semantic_audit_targets:
+  - com.android.inputmethod.latin
+  - com.android.smspush
+  - com.android.email
+  - org.mozilla.fennec_firefox_dev
+  - firefox
+  - postgres
+  - nginx
+  - sshd
+  - imapd
+  - sleep

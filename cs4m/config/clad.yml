@@ -1,0 +1,3 @@
+runtime:
+  use_all_db_files: true
+  event_type_filter: true
