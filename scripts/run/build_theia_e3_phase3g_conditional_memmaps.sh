@@ -95,7 +95,8 @@ preflight
 
 cmd=(
     "${PYTHON_BIN}"
-    scripts/tools/causal_semantics_slim.py
+    -m
+    scripts.pipeline.entrypoints.conditional_e4
     --dataset "${DATASET}"
     --result_root "${RESULT_ROOT}"
     --out_tag "${OUT_TAG}"
@@ -115,7 +116,6 @@ cmd=(
     --sspm_state_dim 64
     --rank 32
     --sspm_context_mode with_action
-    --sspm_context_action_mode raw_orthrus10
     --sspm_global_context_mode no_global
     --state_memory_mode bounded
     --sspm_state_memory_policy probationary_lru
@@ -130,8 +130,6 @@ cmd=(
     --action_embedding_cache_dir "${PHASE3E_CACHE_ROOT}/action_embeddings/THEIA_E3_latent64"
     --event_index_cache_mode auto
     --event_index_cache_dir "${PHASE3E_CACHE_ROOT}/event_indices/THEIA_E3"
-    --x_context_cache_dir "${PHASE3E_CACHE_ROOT}/x_context/THEIA_E3"
-    --x_context_memmap_enabled
     --sspm_train_backend torch
     --sspm_infer_backend numpy
     --sspm_train_mode train_conditional_and_save

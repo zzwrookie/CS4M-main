@@ -19,7 +19,7 @@ import numpy as np
 
 from cs4m.config.config import DATASET_DEFAULT_CONFIG
 from cs4m.config.provnet_utils import datetime_to_ns_time_US
-from utils.score_tuning_utils import (
+from legacy.compatibility.score_tuning_utils import (
     false_positives_per_day_from_mask,
     process_level_recall_from_mask,
     threshold_from_reference_scores,

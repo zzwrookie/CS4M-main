@@ -18,14 +18,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from cs4m.config.provnet_utils import init_database_connection
 from scripts.data.get_dataset import parse_split_days, use_event_type_filter
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     SlimConfig,
     _residual_tokens_for_row,
     build_node_maps,
     residual_text,
     stream_dataset_rows,
 )
-from scripts.tools.db_stream_utils import _cfg_for_dataset
+from scripts.pipeline.io.db_stream import _cfg_for_dataset
 from cs4m.semantics.semantic_router import load_process_semantic_config
 
 

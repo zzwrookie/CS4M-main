@@ -25,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from cs4m.config.provnet_utils import init_database_connection
 from scripts.data.get_dataset import parse_split_days, use_event_type_filter
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     NETWORK_SEMANTIC_RULES_VERSION,
     CADETS_SEMANTIC_RULES_VERSION,
     THEIA_SEMANTIC_RULES_VERSION,
@@ -35,7 +35,7 @@ from scripts.tools.causal_semantics_slim import (
     build_node_maps,
     stream_dataset_rows,
 )
-from scripts.tools.db_stream_utils import _cfg_for_dataset
+from scripts.pipeline.io.db_stream import _cfg_for_dataset
 from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_LEGACY_SEMANTIC_MODE,
     CLEARSCOPE_REFINED_SEMANTIC_MODE,

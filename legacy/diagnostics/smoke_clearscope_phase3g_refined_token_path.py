@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from cs4m.config.provnet_utils import init_database_connection
 from scripts.data.get_dataset import parse_split_days, use_event_type_filter
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     SlimConfig,
     _effective_latent_dim,
     _phase3e_detect_event_id_column,
@@ -30,7 +30,7 @@ from scripts.tools.causal_semantics_slim import (
     load_word2vec_semantic_metadata,
     validate_word2vec_semantic_mode_matches_config,
 )
-from scripts.tools.db_stream_utils import _cfg_for_dataset
+from scripts.pipeline.io.db_stream import _cfg_for_dataset
 from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_REFINED_SEMANTIC_MODE,
     normalize_clearscope_semantic_mode,

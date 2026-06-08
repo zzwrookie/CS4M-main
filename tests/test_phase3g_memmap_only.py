@@ -5,7 +5,16 @@ from pathlib import Path
 
 from cs4m.config.config import PROJECT_ROOT, get_runtime_required_args, get_yml_cfg
 from cs4m.phase3g.compact_node_embeddings import load_compact_used_node_artifacts
-from scripts.tools import causal_semantics_slim as slim
+from scripts.pipeline.conditional.train import _phase3g_conditional_memmap_only_payload
+from scripts.pipeline.config.runtime_config import (
+    CONDITIONAL_GROUP_THRESHOLD_MODE,
+    CONDITIONAL_HEAD_ARCH_SHARED_V1,
+    SlimConfig,
+)
+from scripts.pipeline.entrypoints.arguments import config_from_args, parse_args
+from scripts.pipeline.state.online_state_runtime import (
+    validate_word2vec_semantic_mode_matches_config,
+)
 
 
 class ConfigPackageTests(unittest.TestCase):
@@ -66,16 +75,16 @@ class Phase3GConditionalMemmapOnlyTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            config = slim.SlimConfig(
+            config = SlimConfig(
                 dataset="THEIA_E3",
                 pretrained_residual_embedder_path=str(artifact),
                 semantic_mode="theia_linux_raw_detail_v2",
             )
 
-            slim.validate_word2vec_semantic_mode_matches_config(config)
+            validate_word2vec_semantic_mode_matches_config(config)
 
     def test_cli_flag_sets_memmap_only_mode(self) -> None:
-        args = slim.parse_args(
+        args = parse_args(
             [
                 "--dataset",
                 "THEIA_E3",
@@ -90,26 +99,26 @@ class Phase3GConditionalMemmapOnlyTests(unittest.TestCase):
                 "--sspm_checkpoint_path",
                 "phase3e.pkl",
                 "--event_threshold_mode",
-                slim.CONDITIONAL_GROUP_THRESHOLD_MODE,
+                CONDITIONAL_GROUP_THRESHOLD_MODE,
                 "--phase3g_build_conditional_memmap_only",
             ],
         )
 
-        config = slim.config_from_args(args)
+        config = config_from_args(args)
 
         self.assertTrue(config.phase3g_build_conditional_memmap_only)
         self.assertEqual("train_conditional_and_save", config.sspm_train_mode)
         self.assertEqual("conditional_action_semantic", config.sspm_score_head)
 
     def test_memmap_only_payload_marks_no_training_or_labels(self) -> None:
-        config = slim.SlimConfig(
+        config = SlimConfig(
             dataset="THEIA_E3",
             out_tag="THEIA_E3_MEMMAP_ONLY",
             sspm_score_head="conditional_action_semantic",
-            sspm_conditional_head_arch=slim.CONDITIONAL_HEAD_ARCH_SHARED_V1,
+            sspm_conditional_head_arch=CONDITIONAL_HEAD_ARCH_SHARED_V1,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            payload = slim._phase3g_conditional_memmap_only_payload(
+            payload = _phase3g_conditional_memmap_only_payload(
                 config=config,
                 output_dir=Path(temp_dir),
                 memmap_meta={

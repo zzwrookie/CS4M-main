@@ -19,8 +19,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from cs4m.config.provnet_utils import get_indexid2msg, init_database_connection, log
-from scripts.eval.evaluate_event_scores import _attack_windows_for_dataset
-from scripts.tools.eval_utils import (
+from legacy.tools.evaluate_event_scores import _attack_windows_for_dataset
+from scripts.pipeline.outputs.evaluation import (
     best_under_fp_target,
     best_sweep_row,
     empty_event_counts,
@@ -42,7 +42,7 @@ from scripts.data.get_dataset import (
     parse_split_days,
     use_event_type_filter,
 )
-from scripts.tools.db_stream_utils import _build_index_summaries, _cfg_for_dataset, _query_count, _stream_events
+from scripts.pipeline.io.db_stream import _build_index_summaries, _cfg_for_dataset, _query_count, _stream_events
 from cs4m.utils.common import robust_stats, stable_hash
 from legacy.baselines.chain_profile import BenignChainProfile, ChainProfileConfig
 from legacy.baselines.lowrank import LowRankConfig, LowRankStreamModel

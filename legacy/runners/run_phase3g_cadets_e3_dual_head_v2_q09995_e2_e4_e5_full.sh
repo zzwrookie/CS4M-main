@@ -333,6 +333,7 @@ run_one() {
         PRETRAINED_RESIDUAL_EMBEDDER_PATH="${PRETRAINED_EMBEDDER}" \
         "${head_override[@]}" \
         SSPM_SCORE_HEAD="conditional_action_semantic" \
+        PHASE3E_X_CONTEXT_MEMMAP_ENABLED="false" \
         SSPM_CONDITIONAL_HEAD_ARCH="dual_lowrank_by_target_case_v2" \
         SSPM_TRAIN_MODE="load_and_infer" \
         SSPM_INFER_FAST_PATH="true" \

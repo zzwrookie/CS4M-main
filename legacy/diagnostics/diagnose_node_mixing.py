@@ -27,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from cs4m.config.provnet_utils import init_database_connection
 from scripts.data.get_dataset import get_dataset_splits, parse_split_days, use_event_type_filter
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     SlimConfig,
     _load_process_config,
     _residual_tokens_for_row,
@@ -36,7 +36,7 @@ from scripts.tools.causal_semantics_slim import (
     row_fields,
     stream_dataset_rows,
 )
-from scripts.tools.db_stream_utils import _cfg_for_dataset
+from scripts.pipeline.io.db_stream import _cfg_for_dataset
 
 
 def entropy_bits(counts: Mapping[str, int]) -> float:

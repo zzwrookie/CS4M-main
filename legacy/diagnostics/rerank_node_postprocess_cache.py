@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.tools.eval_utils import best_sweep_row, best_under_fp_target, node_confusion_from_masks, rank_scores, target_for_dataset
+from scripts.pipeline.outputs.evaluation import best_sweep_row, best_under_fp_target, node_confusion_from_masks, rank_scores, target_for_dataset
 from legacy.tools.run_tflr_light_db_lowrank import (
     NODE_RERANK_FEATURES,
     _apply_evidence_band_gate,
