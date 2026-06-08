@@ -45,7 +45,7 @@ from scripts.tools.causal_semantics_slim import (
     stream_dataset_rows_slim,
 )
 from cs4m.embeddings.residual import residual_embedder_from_state_dict
-from cs4m.models.lowrank import SSPMLowRankModel
+from cs4m.models.cs4m_lowrank import SSPMLowRankModel
 
 
 DATASETS = ("CADETS_E3", "THEIA_E3")

@@ -38,7 +38,7 @@ from cs4m.semantics.semantic_router import (
     ProcessSemanticConfig,
     load_process_semantic_config,
 )
-from cs4m.semantics.residual_tokens import SemanticSketchSlim
+from legacy.experiments.residual_hash_doc2vec import SemanticSketchSlim
 
 
 TRACE_FIELDS = (

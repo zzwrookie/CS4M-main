@@ -20,7 +20,7 @@ CS4M 是一个基于 provenance event stream 的在线威胁检测项目。核�
   -> residual tokens / Word2Vec 嵌入
   -> Phase3E 节点、动作、上下文缓存
   -> SSPM 低秩流式状态模型
-  -> Phase3G action/conditional head
+  -> Phase3G conditional head
   -> 在线 event alerts
 ```
 
@@ -36,7 +36,6 @@ Phase3E 负责把事件流转换成可复用的训练/推理缓存。它关注�
 
 Phase3G 负责在 Phase3E 产物之上构建更细的 scoring head。它关注“当前事件是否异常”：
 
-- action head 预测动作；
 - conditional head 根据事件类型、动作、端点类型选择目标；
 - compact node embeddings 降低只访问部分节点时的内存；
 - validation cache 支持无标签阈值计算。
@@ -129,18 +128,19 @@ result = normalize_process_semantics(command="/bin/bash -c curl x", profile=prof
 
 ### `residual_tokens.py`
 
-把事件文本转换为 residual semantic tokens。它服务当前 SSPM 主链路。
+把事件文本转换为 residual semantic tokens。它服务当前 SSPM 主链路，但不再在 active
+代码里做 hash sketch 或 Doc2Vec。当前 CADETS/THEIA 最佳链路使用 residual Word2Vec：
+token 先由数据集/OS 语义规则产生，再由预训练 Word2Vec 模型池化成向量。
 
-小矩阵例子：
+例子：
 
 ```text
-tokens = ["bin", "bash", "curl"]
-hash bins = [2, 5, 2]
-signs = [+1, -1, +1]
-
-latent_dim=6:
-[0, 0, +2, 0, 0, -1]
-normalize 后作为事件语义向量
+text = "/bin/bash -c curl"
+tokens = ["bin", "bash", "-c", "curl"]
+Word2Vec:
+  bash -> [0.2, 0.1]
+  curl -> [0.4, 0.0]
+mean -> [0.3, 0.05]
 ```
 
 ## 5. `cs4m/embeddings/`
@@ -196,15 +196,15 @@ action table:
 
 构建 Phase3E `X_context`。这是模型输入矩阵，每一行对应一个事件的上下文。
 
-小矩阵例子：
+当前最佳链路的 Phase3E context 由 runner 参数控制。本轮检查发现 CADETS/THEIA 最佳链
+仍显式传入：
 
 ```text
-src_state = [0.1, 0.2]
-dst_state = [0.0, 0.3]
-action_one_hot = [1, 0, 0]
-
-X_context row = [0.1, 0.2, 0.0, 0.3, 1, 0, 0]
+--sspm_context_action_mode raw_orthrus10
 ```
+
+因此不能在没有重新验证 checkpoint/cache 兼容性的情况下强行删除这一路径。新的主链说明不再
+把 action one-hot 当作推荐策略；它只是当前已验证 checkpoint 仍依赖的兼容输入形态。
 
 ### `head_training.py`
 
@@ -230,21 +230,6 @@ compact map:
 
 原 embedding[99] 变成 compact_embedding[0]
 原 embedding[10] 变成 compact_embedding[1]
-```
-
-### `action_head.py`
-
-Phase3G action head 根据上下文预测动作类别。它是动作预测分支，不等同于 conditional
-semantic head。
-
-矩阵例子：
-
-```text
-X:       [1 x input_dim]
-W1:      [input_dim x rank]
-W2:      [rank x action_count]
-logits = X @ W1 @ W2 + bias
-score  = -log softmax(logits)[true_action]
 ```
 
 ### `conditional_head.py`
@@ -273,7 +258,7 @@ distance(pred, target) -> event score
 
 ## 8. `cs4m/models/`
 
-### `lowrank.py`
+### `cs4m_lowrank.py`
 
 当前 SSPM 主模型。它维护流式 node state，并用低秩矩阵预测当前事件语义目标。
 
@@ -314,7 +299,9 @@ node_pair_no_action   = mean(src_embedding, dst_embedding)
 
 ### `simple_gates.py`
 
-固定动作 gate、action one-hot 和简单的更新权重逻辑。`lowrank.py` 和主 runner 都会使用。
+固定动作 gate、当前 active runner 仍依赖的 raw ORTHRUS10 action context，以及简单的更新
+权重逻辑。`cs4m_lowrank.py` 和主 runner 都会使用。注意：本轮检查发现 CADETS/THEIA
+最佳链 runner 仍传入 `--sspm_context_action_mode raw_orthrus10`，所以这里不能强制删除。
 
 ## 10. `cs4m/state/`
 
@@ -365,7 +352,7 @@ SQLite residual embedding cache。用于避免重复计算相同 token 序列的
 | `semantics/*` | `cadets_freebsd.py` | `theia_linux.py` | `clearscope_android.py` |
 | `embeddings/residual.py` | 使用 | 使用 | 训练/烟测使用 |
 | `phase3e/*` | 最佳链缓存 | 最佳链缓存 | 可复用 |
-| `models/lowrank.py` | E4/E2/E5 base state | E4 base state | 可复用 |
+| `models/cs4m_lowrank.py` | E4/E2/E5 base state | E4 base state | 可复用 |
 | `phase3g/conditional_head.py` | dual-head v2/Q09995 | shared lowrank v1 | 可复用 |
 | `scoring/target_builder.py` | event-action target | event-action target | 可复用 |
 
@@ -379,3 +366,14 @@ legacy/tools/
 ```
 
 它们可用于对照或历史诊断，但不是当前 CADETS/THEIA 最佳复现链的 active modules。
+
+此外，历史 action-predict head、hash-sketch residual embedder、Doc2Vec residual embedder 已移动到：
+
+```text
+legacy/experiments/phase3g_action_head.py
+legacy/experiments/residual_hash_doc2vec.py
+legacy/diagnostics/export_residual_semantic_trace.py
+```
+
+当前 CADETS/THEIA 最佳链路集中在 `cs4m/phase3g/conditional_head.py`，不再把这些历史实现
+作为 active main-chain 模块。
