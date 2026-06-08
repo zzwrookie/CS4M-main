@@ -63,10 +63,10 @@ THEIA_E3 best chain:
 - `cs4m/embeddings/`: residual embedding builders and state-dict loaders.
 - `cs4m/phase3e/`: event-index memmaps, Word2Vec adapters, semantic tables, X-context, and
   Torch head training helpers.
-- `cs4m/phase3g/`: compact used-node artifacts and Phase3G action/conditional heads.
+- `cs4m/phase3g/`: compact used-node artifacts and active Phase3G conditional heads.
 - `cs4m/scoring/`: score-target builders, calibration, and gates.
 - `cs4m/state/`: streaming state dynamics, bounded state memory, and online state merging.
-- `cs4m/models/`: low-rank streaming model implementations.
+- `cs4m/models/`: CS4M low-rank streaming model implementations.
 - `cs4m/utils/`: shared hashing, type, row, cache, and profiling utilities.
 - `configs/`: YAML experiment and process-semantic presets only.
 - `scripts/run/`: shell wrappers for bounded preflight, dry-run, training, and inference flows.
@@ -86,7 +86,7 @@ Active modules in the current CADETS/THEIA or common E3/E5 pipeline:
   profile.
 - `cs4m/semantics/cadets_freebsd.py`, `theia_linux.py`, `clearscope_android.py`:
   dataset/OS semantic adapters.
-- `cs4m/semantics/residual_tokens.py`: residual/netflow tokenization used by the SSPM chain.
+- `cs4m/semantics/residual_tokens.py`: residual/netflow token parsing used by the SSPM chain.
 - `cs4m/embeddings/residual.py`: residual semantic embedding builders.
 - `cs4m/phase3e/event_index.py`: compact event-index dtype, fingerprints, and memmap IO.
 - `cs4m/phase3e/word2vec_adapter.py`: Word2Vec adapter fingerprinting.
@@ -94,10 +94,9 @@ Active modules in the current CADETS/THEIA or common E3/E5 pipeline:
 - `cs4m/phase3e/context_memmap.py`: Phase3E `X_context` memmaps.
 - `cs4m/phase3e/head_training.py`: Torch low-rank head training helper.
 - `cs4m/phase3g/compact_node_embeddings.py`: compact used-node embeddings and remapped indexes.
-- `cs4m/phase3g/action_head.py`: Phase3G action-predict head and validation cache helpers.
 - `cs4m/phase3g/conditional_head.py`: shared/dual conditional semantic heads and thresholds.
 - `cs4m/scoring/target_builder.py`: event/action and node-pair score targets.
-- `cs4m/models/lowrank.py`: current SSPM low-rank streaming model.
+- `cs4m/models/cs4m_lowrank.py`: current SSPM low-rank streaming model.
 - `cs4m/state/state_models.py`, `state_memory.py`, `online_state_merging.py`: state dynamics,
   bounded memory, and online state merging.
 - `cs4m/scoring/calibration.py`, `simple_gates.py`: residual calibration and update gates.
@@ -111,6 +110,10 @@ Historical baselines and optional experiments:
   baseline entrypoints.
 - `legacy/experiments/phase3g_no_action_semantic.py`: experimental no-action head. Active
   node-pair target construction remains in `cs4m/scoring/target_builder.py`.
+- `legacy/experiments/phase3g_action_head.py`: historical Phase3G action-predict head. Current
+  CADETS/THEIA best chains use `cs4m/phase3g/conditional_head.py`.
+- `legacy/experiments/residual_hash_doc2vec.py`: historical signed hash-sketch and Doc2Vec
+  residual embedders. Active CADETS/THEIA best chains use residual Word2Vec.
 
 No root compatibility shims are kept. Active and legacy code import from the final subpackage
 or `legacy/` paths directly.

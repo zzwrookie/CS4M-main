@@ -558,8 +558,7 @@ run_infer() {
         echo "error: required Phase3E checkpoint not found for ${key}: ${checkpoint_path}" >&2
         exit 2
     fi
-    if [[ ( "${SSPM_SCORE_HEAD}" == "action_predict" \
-        || "${SSPM_SCORE_HEAD}" == "conditional_action_semantic" ) \
+    if [[ "${SSPM_SCORE_HEAD}" == "conditional_action_semantic" \
         && ! -f "${action_checkpoint_path}" ]] \
         && ! is_true "${DRY_RUN}"; then
         echo "error: required Phase3G score head not found for ${key}: ${action_checkpoint_path}" >&2

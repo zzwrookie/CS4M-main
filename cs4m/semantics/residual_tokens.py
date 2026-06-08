@@ -4,10 +4,6 @@ import ipaddress
 import re
 from typing import Iterable
 
-import numpy as np
-
-from cs4m.utils.common import stable_hash
-
 
 INTERNAL_ENV_CIDRS = (ipaddress.IPv4Network("128.55.12.0/24"),)
 PRIVATE_CIDRS = (
@@ -95,55 +91,14 @@ def netflow_residual_text(dst_addr: object) -> str:
     return f"netflow {exact_ip_token(dst_addr)}"
 
 
-class SemanticSketchSlim:
-    """Deterministic signed feature-hashing text sketch for residual semantics."""
-
-    def __init__(self, latent_dim: int = 32, max_tokens: int = 96) -> None:
-        if int(latent_dim) <= 0:
-            raise ValueError("latent_dim must be positive")
-        if int(max_tokens) <= 0:
-            raise ValueError("max_tokens must be positive")
-        self.latent_dim = int(latent_dim)
-        self.max_tokens = int(max_tokens)
-
-    def encode(self, action: object, object_type: object, text: object = "") -> np.ndarray:
-        """Encode action, object type, and residual text as an L2-normalized vector."""
-        del action, object_type
-        return self.encode_text(text)
-
-    def encode_text(self, text: object = "") -> np.ndarray:
-        """Encode residual text tokens only as an L2-normalized vector."""
-        vector = np.zeros((self.latent_dim,), dtype=np.float32)
-        for token in self.text_only_tokens(text):
-            bucket = stable_hash(token, seed=0) % self.latent_dim
-            sign = 1.0 if (stable_hash(token, seed=17) & 1) == 0 else -1.0
-            vector[bucket] += np.float32(sign)
-        norm = float(np.linalg.norm(vector))
-        if norm > 0.0:
-            vector /= np.float32(norm)
-        return vector
-
-    def _tokens(self, action: object, object_type: object, text: object) -> Iterable[str]:
-        del action, object_type
-        return self.text_only_tokens(text)
-
-    def text_only_tokens(self, text: object) -> Iterable[str]:
-        """Yield natural residual text tokens without field-name prefixes."""
-        yielded = 0
-        for token in self._text_tokens(text):
-            if yielded >= self.max_tokens:
-                return
-            yielded += 1
-            yield token
-
-    @staticmethod
-    def _field_token(name: str, value: object) -> str:
-        text = str(value).strip().lower() if value is not None else ""
-        return f"{name}:{text or 'unknown'}"
-
-    @staticmethod
-    def _text_tokens(value: object) -> Iterable[str]:
-        if value is None:
-            return ()
-        text = str(value).lower()
-        return (match.group(0) for match in _TOKEN_RE.finditer(text))
+def residual_text_tokens(value: object, max_tokens: int | None = None) -> tuple[str, ...]:
+    """Return bounded natural residual text tokens for Word2Vec embedding."""
+    if value is None:
+        return ()
+    limit = None if max_tokens is None else max(int(max_tokens), 0)
+    tokens: list[str] = []
+    for match in _TOKEN_RE.finditer(str(value).lower()):
+        if limit is not None and len(tokens) >= limit:
+            break
+        tokens.append(match.group(0))
+    return tuple(tokens)

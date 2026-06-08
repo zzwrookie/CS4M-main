@@ -61,7 +61,7 @@ from cs4m.semantics.cadets_freebsd import (
     freebsd_process_natural_tokens,
     is_cadets_dataset,
 )
-from cs4m.models.lowrank import (
+from cs4m.models.cs4m_lowrank import (
     DEFAULT_TAU,
     SSPMLowRankConfig,
     SSPMLowRankModel,
@@ -94,16 +94,6 @@ from cs4m.phase3e.node_action_tables import (
 from cs4m.phase3e.head_training import train_lowrank_head_torch
 from cs4m.phase3e.word2vec_adapter import ResidualWord2VecTokenAdapter
 from cs4m.phase3e.context_memmap import build_x_context_memmap, x_context_fingerprint
-from cs4m.phase3g.action_head import (
-    ActionHead,
-    ActionHeadConfig,
-    action_nll_scores_from_logits,
-    build_action_context,
-    load_validation_cache as load_action_validation_cache,
-    quantile_threshold as action_quantile_threshold,
-    score_summary as action_score_summary,
-    write_validation_cache as write_action_validation_cache,
-)
 from cs4m.phase3g.conditional_head import (
     BOTH_COLD_ACTION_TARGET,
     BOTH_COLD_ACTION_TARGET_ID,
@@ -164,7 +154,7 @@ from cs4m.embeddings.residual import (
     build_residual_embedder,
     residual_embedder_from_state_dict,
 )
-from cs4m.semantics.residual_tokens import SemanticSketchSlim, netflow_nll_role
+from cs4m.semantics.residual_tokens import netflow_nll_role, residual_text_tokens
 from cs4m.scoring.calibration import ResidualCalibrationStats, UpdateGateCalibrator
 from cs4m.utils.profiling import SSPMProfiler
 from cs4m.utils.residual_embed_cache import (
@@ -289,12 +279,7 @@ NODE_WORD2VEC_SOURCES = {"residual_pretrained", "train_node_new"}
 NODE_EMBEDDING_LOOKUP_MODES = {"global_memmap", "compact_used_nodes", "lazy_mmap_lru"}
 SSPM_TRAIN_BACKENDS = {"numpy", "torch", "torch_cpu"}
 SSPM_INFER_BACKENDS = {"numpy"}
-SSPM_SCORE_HEADS = {
-    "semantic_residual",
-    "action_predict",
-    "conditional_action_semantic",
-    CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD,
-}
+SSPM_SCORE_HEADS = {"semantic_residual", "conditional_action_semantic"}
 NODE_REPR_FUSIONS = {"simple_mean"}
 EVENT_INDEX_CACHE_MODES = {"off", "auto", "force"}
 _PHASE3E_CHECKPOINT_FORBIDDEN_KEYS = {
@@ -1355,15 +1340,6 @@ class SlimConfig:
     word2vec_workers: int = 4
     word2vec_seed: int = 0
     word2vec_oov_policy: str = "unk"
-    doc2vec_window: int = 5
-    doc2vec_min_count: int = 1
-    doc2vec_dm: int = 1
-    doc2vec_negative: int = 5
-    doc2vec_epochs: int = 20
-    doc2vec_workers: int = 4
-    doc2vec_seed: int = 0
-    doc2vec_infer_epochs: int = 20
-    doc2vec_infer_alpha: float = 0.025
     theia_netflow_policy: str = "fixed"
     action_type_alert_policy: str = "default"
     node_pool_score_mode: str = "base_conf"
@@ -2732,19 +2708,6 @@ def _test_scoring_node_maps(node_maps: Mapping[str, Any]) -> dict[str, Any]:
     return scoring_maps
 
 
-def _make_semantic_sketch(
-    config: SlimConfig,
-    process_cfg: ProcessSemanticConfig | None,
-) -> SemanticSketchSlim:
-    latent_dim = int(config.latent_dim)
-    max_tokens = max(config.max_tokens_per_node, 1)
-    if _process_semantics_is_v1(process_cfg):
-        assert process_cfg is not None
-        latent_dim = int(process_cfg.semantic_sketch_latent_dim)
-        max_tokens = max(int(process_cfg.semantic_sketch_max_tokens), 1)
-    return SemanticSketchSlim(latent_dim=latent_dim, max_tokens=max_tokens)
-
-
 def _effective_latent_dim(
     config: SlimConfig,
     process_cfg: ProcessSemanticConfig | None,
@@ -2793,15 +2756,6 @@ def _make_residual_embedding_config(
         word2vec_workers=int(config.word2vec_workers),
         word2vec_seed=int(config.word2vec_seed),
         word2vec_oov_policy=str(config.word2vec_oov_policy),
-        doc2vec_window=int(config.doc2vec_window),
-        doc2vec_min_count=int(config.doc2vec_min_count),
-        doc2vec_dm=int(config.doc2vec_dm),
-        doc2vec_negative=int(config.doc2vec_negative),
-        doc2vec_epochs=int(config.doc2vec_epochs),
-        doc2vec_workers=int(config.doc2vec_workers),
-        doc2vec_seed=int(config.doc2vec_seed),
-        doc2vec_infer_epochs=int(config.doc2vec_infer_epochs),
-        doc2vec_infer_alpha=float(config.doc2vec_infer_alpha),
     )
 
 
@@ -2895,7 +2849,7 @@ def _residual_tokens_for_row(
         theia_netflow_policy=config.theia_netflow_policy,
         semantic_mode=config.semantic_mode,
     )
-    return list(SemanticSketchSlim._text_tokens(text))
+    return list(residual_text_tokens(text))
 
 
 def _stage_log(config: SlimConfig, stage: str, **values: object) -> None:
@@ -5615,37 +5569,12 @@ def _phase3g_file_fingerprint(path: str | Path) -> dict[str, Any]:
     return _phase3e_file_fingerprint(path)
 
 
-def _phase3g_action_fingerprint(
-    *,
-    config: SlimConfig,
-    action_head: ActionHead,
-    paths: Mapping[str, Path],
-    event_meta: Mapping[str, Any],
-    event_index: np.ndarray,
-    split: str,
-) -> dict[str, Any]:
-    split_meta = dict(dict(event_meta.get("splits", {})).get(split, {}))
-    return {
-        "schema": "phase3g_action_validation_cache_v1",
-        "score_head": str(config.sspm_score_head),
-        "action_head_fingerprint": action_head.fingerprint().get("fingerprint_sha256"),
-        "node_repr_fusion": str(config.node_repr_fusion),
-        "dataset": str(config.dataset),
-        "split": str(split),
-        "event_index_fingerprint": event_index_fingerprint(_phase3e_event_index_array(event_index)),
-        "source_split_event_index_fingerprint": split_meta.get("event_index_fingerprint")
-        or split_meta.get("fingerprint"),
-        "node_embedding_fingerprint": _phase3g_file_fingerprint(paths["node_embeddings"]),
-        "action_embedding_fingerprint": _phase3g_file_fingerprint(paths["action_embeddings"]),
-        "state_model": str(config.sspm_state_model),
-        "state_merge_mode": str(config.sspm_state_merge_mode),
-        "state_merge_threshold": float(config.sspm_state_merge_threshold),
-        "threshold_mode": str(config.event_threshold_mode),
-        "threshold_quantile": float(config.event_threshold_quantile),
-        "input_dim": int(action_head.config.input_dim),
-        "rank": int(action_head.config.rank),
-        "output_dim": int(action_head.config.output_dim),
-    }
+def _phase3g_action_fingerprint(*_args: object, **_kwargs: object) -> dict[str, Any]:
+    """Fail fast for the historical action-predict validation fingerprint path."""
+    raise ValueError(
+        "historical Phase3G action-predict head moved to "
+        "legacy.experiments.phase3g_action_head",
+    )
 
 
 def _phase3g_conditional_fingerprint(
@@ -6865,46 +6794,12 @@ def _phase3g_update_dense_e2_state(
     has_state[dst_idx] = True
 
 
-def _phase3g_action_scores_stream(
-    *,
-    config: SlimConfig,
-    action_head: ActionHead,
-    event_index: np.ndarray,
-    node_embeddings: np.ndarray,
-    action_embeddings: np.ndarray,
-) -> tuple[np.ndarray, int]:
-    records = _phase3e_event_index_array(event_index)
-    model = profile_model
-    type_eye = _phase3g_type_eye()
-    scores = np.zeros((int(records.shape[0]),), dtype=np.float32)
-    chunk_size = max(int(config.sspm_infer_chunk_events), 1)
-    model.reset_state()
-    for start in range(0, int(records.shape[0]), chunk_size):
-        end = min(start + chunk_size, int(records.shape[0]))
-        chunk = records[start:end]
-        contexts = np.zeros((int(chunk.shape[0]), int(action_head.config.input_dim)), dtype=np.float32)
-        action_ids = chunk["action_id"].astype(np.int64, copy=True)
-        for offset, row in enumerate(chunk):
-            z = _phase3e_target_from_index_row(row, node_embeddings, action_embeddings)
-            context, src_type_name, dst_type_name, _, _ = _phase3g_action_context_from_model(
-                model,
-                row,
-                node_embeddings,
-                type_eye,
-            )
-            contexts[offset] = context
-            action = str(ORTHRUS10_ACTION_NAMES[int(row["action_id"])])
-            _phase3f_e2_none_update_from_numeric_row(
-                model,
-                row,
-                z,
-                action,
-                src_type_name,
-                dst_type_name,
-                residual_score=0.0,
-            )
-        scores[start:end] = action_nll_scores_from_logits(action_head.logits(contexts), action_ids)
-    return scores, int(records.shape[0])
+def _phase3g_action_scores_stream(*_args: object, **_kwargs: object) -> tuple[np.ndarray, int]:
+    """Fail fast for the historical action-predict validation stream."""
+    raise ValueError(
+        "historical Phase3G action-predict head moved to "
+        "legacy.experiments.phase3g_action_head",
+    )
 
 
 def _phase3g_conditional_scores_stream(
@@ -7680,127 +7575,12 @@ def _phase3g_train_conditional_head_torch_from_memmap(
     }
 
 
-def _phase3g_train_action_head_torch(
-    *,
-    config: SlimConfig,
-    action_head: ActionHead,
-    train_index: np.ndarray,
-    node_embeddings: np.ndarray,
-    action_embeddings: np.ndarray,
-) -> dict[str, Any]:
-    import torch
-
-    device, cuda_available, device_name = _resolve_phase3g_torch_device(
-        torch,
-        str(config.sspm_torch_device),
+def _phase3g_train_action_head_torch(*_args: object, **_kwargs: object) -> dict[str, Any]:
+    """Fail fast for historical action-predict head training."""
+    raise ValueError(
+        "historical Phase3G action-predict head training moved to legacy; "
+        "current best chains use conditional_action_semantic",
     )
-    if device == "cuda":
-        torch.cuda.reset_peak_memory_stats()
-    w1 = torch.nn.Parameter(torch.tensor(action_head.w1, dtype=torch.float32, device=device))
-    w2 = torch.nn.Parameter(torch.tensor(action_head.w2, dtype=torch.float32, device=device))
-    bias = torch.nn.Parameter(torch.tensor(action_head.bias, dtype=torch.float32, device=device))
-    lr = _phase3e_train_lr(config)
-    optimizer = torch.optim.Adam(
-        [w1, w2, bias],
-        lr=float(lr),
-        weight_decay=float(config.sspm_torch_weight_decay),
-    )
-    records = _phase3e_event_index_array(train_index)
-    row_count = int(records.shape[0])
-    chunk_size = max(int(config.sspm_torch_batch_events), 1)
-    best_loss = float("inf")
-    loss_by_epoch: list[float] = []
-    plateau_epochs = 0
-    early_stop_reason = ""
-    started = time.perf_counter()
-    for _epoch in range(max(int(config.sspm_epochs), 1)):
-        model = SSPMLowRankModel(_make_sspm_config(config, _load_process_config(config)))
-        model.reset_state()
-        type_eye = _phase3g_type_eye()
-        epoch_loss = 0.0
-        epoch_batches = 0
-        for start in range(0, row_count, chunk_size):
-            end = min(start + chunk_size, row_count)
-            chunk = records[start:end]
-            contexts = np.zeros((int(chunk.shape[0]), int(action_head.config.input_dim)), dtype=np.float32)
-            actions = chunk["action_id"].astype(np.int64, copy=True)
-            for offset, row in enumerate(chunk):
-                z = _phase3e_target_from_index_row(row, node_embeddings, action_embeddings)
-                context, src_type_name, dst_type_name, _, _ = _phase3g_action_context_from_model(
-                    model,
-                    row,
-                    node_embeddings,
-                    type_eye,
-                )
-                contexts[offset] = context
-                action = str(ORTHRUS10_ACTION_NAMES[int(row["action_id"])])
-                _phase3f_e2_none_update_from_numeric_row(
-                    model,
-                    row,
-                    z,
-                    action,
-                    src_type_name,
-                    dst_type_name,
-                    residual_score=0.0,
-                )
-            x = torch.as_tensor(contexts, dtype=torch.float32, device=device)
-            y = torch.as_tensor(actions, dtype=torch.long, device=device)
-            logits = x @ w1 @ w2 + bias
-            loss = torch.nn.functional.cross_entropy(logits, y)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_([w1, w2, bias], 5.0)
-            optimizer.step()
-            epoch_loss += float(loss.detach().cpu().item())
-            epoch_batches += 1
-        mean_loss = float(epoch_loss / max(epoch_batches, 1))
-        loss_by_epoch.append(mean_loss)
-        if best_loss - mean_loss > float(config.sspm_early_stop_min_delta):
-            best_loss = mean_loss
-            plateau_epochs = 0
-        else:
-            plateau_epochs += 1
-            if int(config.sspm_early_stop_patience) > 0 and plateau_epochs >= int(
-                config.sspm_early_stop_patience,
-            ):
-                early_stop_reason = "loss_plateau"
-                break
-        _stage_log(
-            config,
-            "phase3g_action_train_epoch",
-            epoch=len(loss_by_epoch),
-            loss=f"{mean_loss:.6f}",
-        )
-    if device == "cuda":
-        torch.cuda.synchronize()
-        peak_gpu_mb = float(torch.cuda.max_memory_allocated() / 1024.0 / 1024.0)
-    else:
-        peak_gpu_mb = 0.0
-    action_head.w1 = w1.detach().cpu().numpy().astype(np.float32, copy=True)
-    action_head.w2 = w2.detach().cpu().numpy().astype(np.float32, copy=True)
-    action_head.bias = bias.detach().cpu().numpy().astype(np.float32, copy=True)
-    return {
-        "score_head": "action_predict",
-        "node_repr_fusion": str(config.node_repr_fusion),
-        "input_dim": int(action_head.config.input_dim),
-        "rank": int(action_head.config.rank),
-        "output_dim": int(action_head.config.output_dim),
-        "torch_device": device,
-        "torch_cuda_available": bool(cuda_available),
-        "torch_device_name": str(device_name),
-        "torch_optimizer": "Adam",
-        "torch_lr": float(lr),
-        "torch_weight_decay": float(config.sspm_torch_weight_decay),
-        "torch_batch_events": int(config.sspm_torch_batch_events),
-        "torch_epochs_completed": int(len(loss_by_epoch)),
-        "torch_train_loss_best": float(best_loss if loss_by_epoch else 0.0),
-        "torch_train_loss_final": float(loss_by_epoch[-1] if loss_by_epoch else 0.0),
-        "torch_early_stop_reason": str(early_stop_reason),
-        "torch_train_time_sec": float(time.perf_counter() - started),
-        "torch_peak_gpu_memory_mb": float(peak_gpu_mb),
-        "loss_by_epoch": loss_by_epoch,
-        "train_events_actual": int(row_count),
-    }
 
 
 def _phase3g_train_conditional_head_torch(
@@ -7993,118 +7773,12 @@ def _resolve_phase3g_torch_device(torch_module: Any, requested: str) -> tuple[st
 
 
 def run_phase3g_action_train_from_precompute(config: SlimConfig) -> Path:
-    """Train one Phase3G action-predict head from Phase3E compact artifacts."""
-    _validate_active_event_score_mode(config.event_score_mode)
-    if str(config.sspm_train_mode) != "train_and_save":
-        raise ValueError("Phase3G action train requires SSPM_TRAIN_MODE=train_and_save")
-    started = time.perf_counter()
-    output_dir = Path(config.result_root) / config.out_tag
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths, event_meta = _phase3g_effective_artifacts(config)
-    train_index, train_count = _phase3e_open_split_event_index(
-        paths,
-        event_meta,
-        "train",
-        max_events=int(config.max_train_events),
+    """Reject historical action-predict head training from active code."""
+    del config
+    raise ValueError(
+        "historical Phase3G action-predict head training moved to legacy; "
+        "current best chains use conditional_action_semantic",
     )
-    node_embeddings = _phase3g_open_node_embeddings(config, paths)
-    action_embeddings = np.load(paths["action_embeddings"], mmap_mode="r")
-    validation_count = int(
-        dict(dict(event_meta.get("splits", {})).get("validation", {})).get("num_events", 0),
-    )
-    input_dim = _phase3g_action_input_dim(node_embeddings)
-    if is_cadets_dataset(config.dataset) and input_dim != 136:
-        raise ValueError(f"CADETS_E3 Phase3G action input_dim must be 136, got {input_dim}")
-    action_head = ActionHead(
-        ActionHeadConfig(
-            input_dim=input_dim,
-            rank=int(config.rank),
-            output_dim=len(ORTHRUS10_ACTION_NAMES),
-            seed=17,
-            node_repr_fusion=str(config.node_repr_fusion),
-        ),
-    )
-    _stage_log(
-        config,
-        "phase3g_action_train_start",
-        count=train_count,
-        input_dim=input_dim,
-        rank=int(config.rank),
-    )
-    train_stats = _phase3g_train_action_head_torch(
-        config=config,
-        action_head=action_head,
-        train_index=train_index,
-        node_embeddings=node_embeddings,
-        action_embeddings=action_embeddings,
-    )
-    checkpoint_path = _phase3g_resolved_action_checkpoint_path(config)
-    metadata = {
-        "score_head": "action_predict",
-        "node_repr_fusion": str(config.node_repr_fusion),
-        "dataset": str(config.dataset),
-        "target_mode": str(config.sspm_target_mode),
-        "node_word2vec_source": str(config.node_word2vec_source),
-        "node_embedding_fingerprint": _phase3g_file_fingerprint(paths["node_embeddings"]),
-        "action_embedding_fingerprint": _phase3g_file_fingerprint(paths["action_embeddings"]),
-        "event_index_fingerprint": dict(dict(event_meta.get("splits", {})).get("train", {})).get(
-            "event_index_fingerprint",
-        ),
-        "state_model": str(config.sspm_state_model),
-        "train_backend": str(config.sspm_train_backend),
-        "infer_backend": str(config.sspm_infer_backend),
-        "train_stats": train_stats,
-    }
-    saved_path = action_head.save(checkpoint_path, metadata=metadata)
-    _stage_log(config, "phase3g_action_train_end", checkpoint=str(saved_path))
-    eval_payload = {
-        "dataset": str(config.dataset),
-        "out_tag": str(config.out_tag),
-        "phase3g": {
-            "score_head": "action_predict",
-            "node_repr_fusion": str(config.node_repr_fusion),
-            "action_head_checkpoint_path": str(saved_path),
-            "input_dim": int(input_dim),
-            "rank": int(config.rank),
-            "output_dim": len(ORTHRUS10_ACTION_NAMES),
-            "train_stats": train_stats,
-        },
-        "train_events_actual": int(train_count),
-        "validation_events_actual": int(validation_count),
-        "test_events_actual": 0,
-        "runtime": {"elapsed_seconds": float(time.perf_counter() - started)},
-        "leakage_contract": {
-            "contains_test_scores": False,
-            "contains_test_labels": False,
-            "ground_truth_used": False,
-        },
-    }
-    eval_path = output_dir / "eval_causal_semantics_slim.json"
-    eval_path.write_text(
-        json.dumps(eval_payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-    dummy_model = SSPMLowRankModel(_make_sspm_config(config, _load_process_config(config)))
-    write_effective_config(
-        output_dir,
-        config,
-        dummy_model,
-        True,
-        train_count=int(train_count),
-        validation_count=int(validation_count),
-        test_count=0,
-    )
-    write_metrics_json(
-        output_dir,
-        config,
-        dummy_model,
-        eval_payload,
-        train_count=int(train_count),
-        validation_count=int(validation_count),
-        test_count=0,
-        embedder_loaded=True,
-    )
-    return eval_path
 
 
 def run_phase3g_conditional_train_from_precompute(config: SlimConfig) -> Path:
@@ -8442,54 +8116,14 @@ def _write_phase3g_conditional_memmap_only_outputs(
 
 
 def _phase3g_load_or_build_validation_cache(
-    *,
-    config: SlimConfig,
-    action_head: ActionHead,
-    paths: Mapping[str, Path],
-    event_meta: Mapping[str, Any],
-    validation_index: np.ndarray,
-    node_embeddings: np.ndarray,
-    action_embeddings: np.ndarray,
+    *_args: object,
+    **_kwargs: object,
 ) -> tuple[dict[str, Any], float, np.ndarray]:
-    fingerprint = _phase3g_action_fingerprint(
-        config=config,
-        action_head=action_head,
-        paths=paths,
-        event_meta=event_meta,
-        event_index=validation_index,
-        split="validation",
+    """Reject historical action-predict validation caches from active code."""
+    raise ValueError(
+        "historical Phase3G action-predict validation cache moved to legacy; "
+        "current best chains use conditional validation caches",
     )
-    cache_dir = _phase3g_action_cache_dir(config, fingerprint)
-    try:
-        meta = load_action_validation_cache(cache_dir, expected_fingerprint=fingerprint)
-        scores = np.memmap(
-            meta["validation_action_scores"],
-            dtype=np.float32,
-            mode="r",
-            shape=(int(meta["num_scores"]),),
-        )
-        return meta, float(meta["threshold"]), scores
-    except FileNotFoundError:
-        pass
-    _stage_log(config, "phase3g_action_validation_cache_build_start", path=str(cache_dir))
-    scores, count = _phase3g_action_scores_stream(
-        config=config,
-        action_head=action_head,
-        event_index=validation_index,
-        node_embeddings=node_embeddings,
-        action_embeddings=action_embeddings,
-    )
-    if int(count) != int(validation_index.shape[0]):
-        raise ValueError("Phase3G validation count mismatch")
-    meta = write_action_validation_cache(
-        cache_dir,
-        scores=scores,
-        fingerprint=fingerprint,
-        threshold_mode=str(config.event_threshold_mode),
-        threshold_quantile=float(config.event_threshold_quantile),
-    )
-    _stage_log(config, "phase3g_action_validation_cache_build_end", count=count)
-    return meta, float(meta["threshold"]), scores
 
 
 def _phase3g_load_or_build_conditional_validation_cache(
@@ -8672,181 +8306,12 @@ def _phase3g_conditional_threshold_for_case(
     return float(meta.get("threshold", 0.0))
 
 
-def _score_phase3g_action_fast_stream(
-    *,
-    config: SlimConfig,
-    action_head: ActionHead,
-    profile_model: SSPMLowRankModel,
-    test_index: np.ndarray,
-    node_embeddings: np.ndarray,
-    action_embeddings: np.ndarray,
-    threshold: float,
-    output_dir: Path | None,
-) -> dict[str, Any]:
-    scoring_started = time.perf_counter()
-    records = _phase3e_event_index_array(test_index)
-    model = SSPMLowRankModel(_make_sspm_config(config, _load_process_config(config)))
-    type_eye = _phase3g_type_eye()
-    threshold_value = float(threshold)
-    score_summary_obj = _StreamingScoreSummary(threshold_value)
-    raw_paths: dict[str, Path] = {}
-    event_alert_count = 0
-    test_count = 0
-    start_rss_mb = _current_rss_mb()
-    test_phase_peak_rss_mb = start_rss_mb
-    node_pool: dict[int, dict[str, Any]] = {}
-    _stage_log(config, "phase3g_action_fast_test_start", count=int(records.shape[0]))
-    model.reset_state()
-    with ExitStack() as stack:
-        event_writer = None
-        profile_writer = None
-        state_merge_profile_writer = None
-        if output_dir is not None:
-            raw_paths = _raw_output_paths(Path(output_dir))
-            raw_paths["events"] = Path(output_dir) / "online_event_alerts.csv"
-            event_writer = stack.enter_context(
-                StreamingCsvWriter(raw_paths["events"], EVENT_RAW_FIELDS),
-            )
-            profile_writer = stack.enter_context(
-                StreamingCsvWriter(raw_paths["profiling"], PROFILING_FIELDS),
-            )
-        chunk_size = max(int(config.sspm_infer_chunk_events), 1)
-        for start in range(0, int(records.shape[0]), chunk_size):
-            end = min(start + chunk_size, int(records.shape[0]))
-            chunk = records[start:end]
-            contexts = np.zeros((int(chunk.shape[0]), int(action_head.config.input_dim)), dtype=np.float32)
-            actions = chunk["action_id"].astype(np.int64, copy=True)
-            targets: list[np.ndarray] = []
-            for offset, row in enumerate(chunk):
-                z = _phase3e_target_from_index_row(row, node_embeddings, action_embeddings)
-                context, src_type_name, dst_type_name, _, _ = _phase3g_action_context_from_model(
-                    model,
-                    row,
-                    node_embeddings,
-                    type_eye,
-                )
-                contexts[offset] = context
-                targets.append(z)
-                action = str(ORTHRUS10_ACTION_NAMES[int(row["action_id"])])
-                _phase3f_e2_none_update_from_numeric_row(
-                    model,
-                    row,
-                    z,
-                    action,
-                    src_type_name,
-                    dst_type_name,
-                    residual_score=0.0,
-                )
-            scores = action_nll_scores_from_logits(action_head.logits(contexts), actions)
-            for offset, row in enumerate(chunk):
-                stream_pos = start + offset
-                test_count = int(stream_pos) + 1
-                event_score = float(scores[offset])
-                score_summary_obj.observe(event_score)
-                if event_score >= threshold_value:
-                    event_alert_count += 1
-                    alert_row = _phase3f_raw_alert_row(
-                        row,
-                        stream_pos,
-                        event_score,
-                        threshold_value,
-                        event_score,
-                        event_score,
-                        f"validation_{config.event_threshold_mode}",
-                    )
-                    if event_writer is not None:
-                        event_writer.write_row(alert_row)
-                    src_idx = int(row["src_node_idx"])
-                    dst_idx = int(row["dst_node_idx"])
-                    _minimal_node_pool_update(
-                        node_pool,
-                        src_idx,
-                        int(row["event_id"]),
-                        stream_pos,
-                        event_score,
-                        event_score,
-                    )
-                    if dst_idx != src_idx:
-                        _minimal_node_pool_update(
-                            node_pool,
-                            dst_idx,
-                            int(row["event_id"]),
-                            stream_pos,
-                            event_score,
-                            event_score,
-                        )
-            if (
-                int(config.progress_interval_events) > 0
-                and test_count > 0
-                and test_count % int(config.progress_interval_events) == 0
-            ):
-                current_rss_mb = _current_rss_mb()
-                test_phase_peak_rss_mb = max(test_phase_peak_rss_mb, current_rss_mb)
-                _stage_log(
-                    config,
-                    "phase3g_action_fast_test_progress",
-                    count=test_count,
-                    event_alerts=event_alert_count,
-                    node_pool=len(node_pool),
-                )
-                _emit_profile_row(
-                    profile_writer,
-                    _profiling_row(
-                        "test_scoring",
-                        test_count,
-                        scoring_started,
-                        event_alert_count,
-                        len(node_pool),
-                        profile_model,
-                        current_rss_mb=current_rss_mb,
-                        test_phase_peak_rss_mb=test_phase_peak_rss_mb,
-                    ),
-                    verbose=config.verbose,
-                )
-        final_rss_mb = _current_rss_mb()
-        test_phase_peak_rss_mb = max(test_phase_peak_rss_mb, final_rss_mb)
-    test_scoring_seconds = float(time.perf_counter() - scoring_started)
-    smaps = _current_smaps_rollup_mb()
-    return {
-        "test_count": int(test_count),
-        "final_nodes_raw": _final_node_pool_minimal(node_pool),
-        "threshold": threshold_value,
-        "test_score_summary": score_summary_obj.summary(event_alert_count=event_alert_count),
-        "raw_outputs_streamed": output_dir is not None,
-        "output_dir": str(output_dir) if output_dir is not None else "",
-        "raw_output_paths": {key: str(path) for key, path in raw_paths.items()},
-        "event_alert_count": int(event_alert_count),
-        "checkpoint_count": 0,
-        "residual_semantic_examples": {group: [] for group in RESIDUAL_EXAMPLE_GROUPS},
-        "test_scoring_seconds": test_scoring_seconds,
-        "stream_csv_write_seconds": 0.0,
-        "threshold_controller": {
-            "mode": str(config.event_threshold_mode),
-            "initial_threshold": threshold_value,
-            "final_threshold": threshold_value,
-        },
-        "compat_in_memory_outputs_active": False,
-        "raw_alerts_written": bool(output_dir is not None),
-        "analysis_outputs_written": False,
-        "state_merge_diagnostics_written": False,
-        "rss_test_peak_mb": float(test_phase_peak_rss_mb),
-        "process_peak_rss_mb": _safe_peak_rss_mb(),
-        "state_merge_diagnostics_truncated": False,
-        "phase3g_action_predict_enabled": True,
-        "phase3f_fast_path_enabled": True,
-        "online_minimal": True,
-        "online_minimal_rss_start_mb": float(start_rss_mb),
-        "online_minimal_rss_peak_mb": float(test_phase_peak_rss_mb),
-        "online_minimal_rss_final_mb": float(final_rss_mb),
-        "online_minimal_rss_delta_mb": float(test_phase_peak_rss_mb - start_rss_mb),
-        "online_minimal_events_per_sec": float(
-            test_count / max(test_scoring_seconds, 1e-9),
-        ),
-        "online_minimal_state_array_mb": float(_safe_state_array_mb(model)),
-        "online_minimal_alert_buffer_mb": 0.0,
-        "online_minimal_anonymous_rss_mb": smaps.get("anonymous_rss_mb"),
-        "online_minimal_file_backed_rss_mb": smaps.get("file_backed_rss_mb"),
-    }
+def _score_phase3g_action_fast_stream(*_args: object, **_kwargs: object) -> dict[str, Any]:
+    """Reject historical action-predict inference from active code."""
+    raise ValueError(
+        "historical Phase3G action-predict inference moved to legacy; "
+        "current best chains use conditional_action_semantic",
+    )
 
 
 def _score_phase3g_conditional_fast_stream(
@@ -9998,159 +9463,12 @@ def _score_phase3g_action_embedding_fast_stream(
 
 
 def run_phase3g_action_load_and_infer_from_precompute(config: SlimConfig) -> Path:
-    """Run Phase3G action-predict checkpoint inference from Phase3E artifacts."""
-    _validate_active_event_score_mode(config.event_score_mode)
-    if str(config.sspm_train_mode) != "load_and_infer":
-        raise ValueError("Phase3G action infer requires SSPM_TRAIN_MODE=load_and_infer")
-    checkpoint_path = _phase3g_resolved_action_checkpoint_path(config)
-    started = time.perf_counter()
-    output_dir = Path(config.result_root) / config.out_tag
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths, event_meta = _phase3g_effective_artifacts(config)
-    validation_index, validation_count = _phase3e_open_split_event_index(
-        paths,
-        event_meta,
-        "validation",
-        max_events=int(config.max_ref_events),
+    """Reject historical action-predict checkpoint inference from active code."""
+    del config
+    raise ValueError(
+        "historical Phase3G action-predict inference moved to legacy; "
+        "current best chains use conditional_action_semantic",
     )
-    test_index, test_count = _phase3e_open_split_event_index(
-        paths,
-        event_meta,
-        "test",
-        max_events=int(config.max_test_events),
-    )
-    node_embeddings = _phase3g_open_node_embeddings(config, paths)
-    action_embeddings = np.load(paths["action_embeddings"], mmap_mode="r")
-    action_head, action_metadata = ActionHead.load(checkpoint_path)
-    if int(action_head.config.input_dim) != _phase3g_action_input_dim(node_embeddings):
-        raise ValueError("action head input_dim does not match Phase3E embeddings")
-    validation_started = time.perf_counter()
-    cache_meta, threshold, validation_scores = _phase3g_load_or_build_validation_cache(
-        config=config,
-        action_head=action_head,
-        paths=paths,
-        event_meta=event_meta,
-        validation_index=validation_index,
-        node_embeddings=node_embeddings,
-        action_embeddings=action_embeddings,
-    )
-    timing = {
-        "validation_seconds": float(time.perf_counter() - validation_started),
-    }
-    model = SSPMLowRankModel(_make_sspm_config(config, _load_process_config(config)))
-    stream_outputs = _score_phase3g_action_fast_stream(
-        config=config,
-        action_head=action_head,
-        profile_model=model,
-        test_index=test_index,
-        node_embeddings=node_embeddings,
-        action_embeddings=action_embeddings,
-        threshold=float(threshold),
-        output_dir=output_dir,
-    )
-    timing["test_scoring_seconds"] = float(stream_outputs.get("test_scoring_seconds", 0.0))
-    test_summary = dict(stream_outputs.get("test_score_summary", {}))
-    validation_summary = dict(cache_meta.get("summary", {}))
-    score_summary_payload = {
-        "score_head": "action_predict",
-        "event_threshold_mode": str(config.event_threshold_mode),
-        "event_threshold_quantile": float(config.event_threshold_quantile),
-        "final_threshold": float(threshold),
-        "validation": validation_summary,
-        "test": test_summary,
-    }
-    score_summary_path = output_dir / "score_summary.json"
-    score_summary_path.write_text(
-        json.dumps(score_summary_payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-    memory_profile = _empty_memory_profile()
-    memory_profile["rss_test_peak_mb"] = float(stream_outputs.get("rss_test_peak_mb", 0.0))
-    memory_profile["deploy_rss_valid"] = True
-    memory_profile["deploy_infer_rss_peak_mb"] = float(stream_outputs.get("rss_test_peak_mb", 0.0))
-    memory_profile["deploy_infer_rss_final_mb"] = float(_current_rss_mb())
-    memory_profile["deploy_infer_events_per_sec"] = float(stream_outputs.get("test_count", 0)) / max(
-        float(stream_outputs.get("test_scoring_seconds", 0.0)),
-        1e-9,
-    )
-    memory_profile["process_peak_rss_mb"] = float(stream_outputs.get("process_peak_rss_mb", 0.0))
-    memory_profile["online_deploy_model_param_mb"] = _phase3g_conditional_head_param_mb(
-        action_head,
-    )
-    memory_profile["online_deploy_runtime_buffer_mb"] = float(
-        stream_outputs.get("online_deploy_runtime_buffer_mb", 0.0) or 0.0,
-    )
-    memory_profile["online_deploy_threshold_cache_mb"] = float(
-        stream_outputs.get("online_deploy_threshold_cache_mb", 0.0) or 0.0,
-    )
-    eval_payload = _eval_payload(
-        config,
-        stream_outputs,
-        model,
-        max(time.perf_counter() - started, 1e-9),
-        int(test_count),
-        timing=timing,
-        memory=memory_profile,
-        split_metadata={
-            "split_source": "phase3e_event_index_meta",
-            "train_days": [],
-            "validation_days": [],
-            "test_days": [],
-            "year_month": "",
-            "slim_split_override": bool(config.slim_split_override),
-            "slim_split_override_applied": False,
-        },
-    )
-    eval_payload.update(
-        {
-            "dataset": str(config.dataset),
-            "out_tag": str(config.out_tag),
-            "train_events": 0,
-            "validation_events": int(validation_count),
-            "test_events": int(test_count),
-            "train_events_actual": 0,
-            "validation_events_actual": int(validation_count),
-            "test_events_actual": int(test_count),
-            "validation_event_score_summary": validation_summary,
-            "score_summary": score_summary_payload,
-            "score_summary_json": str(score_summary_path),
-            "phase3g": {
-                "score_head": "action_predict",
-                "node_repr_fusion": str(config.node_repr_fusion),
-                "action_head_checkpoint_path": str(checkpoint_path),
-                "action_head_metadata": action_metadata,
-                "validation_cache_dir": str(Path(cache_meta["validation_action_scores"]).parent),
-                "validation_cache_meta": cache_meta,
-            },
-        },
-    )
-    eval_payload["runtime"]["elapsed_seconds"] = float(time.perf_counter() - started)
-    eval_path = output_dir / "eval_causal_semantics_slim.json"
-    eval_path.write_text(
-        json.dumps(eval_payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-    write_effective_config(
-        output_dir,
-        config,
-        model,
-        True,
-        train_count=0,
-        validation_count=int(validation_count),
-        test_count=int(test_count),
-    )
-    write_metrics_json(
-        output_dir,
-        config,
-        state_model,
-        eval_payload,
-        train_count=0,
-        validation_count=int(validation_count),
-        test_count=int(test_count),
-        embedder_loaded=True,
-    )
-    del validation_scores
-    return eval_path
 
 
 def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -> Path:
@@ -10970,12 +10288,8 @@ def _phase3e_node_labels_for_alert_pool(
 
 def run_phase3e_load_and_infer_from_precompute(config: SlimConfig) -> Path:
     """Run one Phase3E checkpoint fanout inference from compact precompute artifacts."""
-    if str(config.sspm_score_head) == "action_predict":
-        return run_phase3g_action_load_and_infer_from_precompute(config)
     if str(config.sspm_score_head) == "conditional_action_semantic":
         return run_phase3g_conditional_load_and_infer_from_precompute(config)
-    if str(config.sspm_score_head) == CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD:
-        return run_phase3g_action_embedding_load_and_infer_from_precompute(config)
     _validate_active_event_score_mode(config.event_score_mode)
     if str(config.sspm_train_mode) != "load_and_infer":
         raise ValueError("Phase3E infer_ablation requires SSPM_TRAIN_MODE=load_and_infer")
@@ -11337,7 +10651,7 @@ def _phase3e_node_tokens_for_row_node(
         role_text = fields.get("dst_role", row.get("dst_summary", "unknown"))
     else:
         role_text = fields.get("src_role", fields.get("dst_role", "unknown"))
-    tokens = tuple(str(token) for token in SemanticSketchSlim._text_tokens(role_text))
+    tokens = tuple(str(token) for token in residual_text_tokens(role_text))
     return tokens or ("unknown",)
 
 
@@ -12758,11 +12072,8 @@ def train_phase3e_real_diag_from_event_index(
 
 def run_phase3e_train_base_from_precompute(config: SlimConfig) -> Path:
     """Train one Phase3E base checkpoint from existing precompute artifacts."""
-    if str(config.sspm_score_head) == "action_predict":
-        return run_phase3g_action_train_from_precompute(config)
     if str(config.sspm_score_head) in {
         "conditional_action_semantic",
-        CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD,
     }:
         return run_phase3g_conditional_train_from_precompute(config)
     _validate_active_event_score_mode(config.event_score_mode)
@@ -16865,23 +16176,6 @@ def model_fingerprint_payload(
         "word2vec_oov_policy": str(
             values.get("word2vec_oov_policy", SlimConfig.word2vec_oov_policy),
         ),
-        "doc2vec_window": int(values.get("doc2vec_window", SlimConfig.doc2vec_window)),
-        "doc2vec_min_count": int(
-            values.get("doc2vec_min_count", SlimConfig.doc2vec_min_count),
-        ),
-        "doc2vec_dm": int(values.get("doc2vec_dm", SlimConfig.doc2vec_dm)),
-        "doc2vec_negative": int(
-            values.get("doc2vec_negative", SlimConfig.doc2vec_negative),
-        ),
-        "doc2vec_epochs": int(values.get("doc2vec_epochs", SlimConfig.doc2vec_epochs)),
-        "doc2vec_workers": int(values.get("doc2vec_workers", SlimConfig.doc2vec_workers)),
-        "doc2vec_seed": int(values.get("doc2vec_seed", SlimConfig.doc2vec_seed)),
-        "doc2vec_infer_epochs": int(
-            values.get("doc2vec_infer_epochs", SlimConfig.doc2vec_infer_epochs),
-        ),
-        "doc2vec_infer_alpha": float(
-            values.get("doc2vec_infer_alpha", SlimConfig.doc2vec_infer_alpha),
-        ),
         "process_semantics": _effective_process_semantic_fingerprint(
             dataset,
             process_semantic_config,
@@ -18789,7 +18083,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--semantic_embedding_method",
-        choices=("hash_sketch", "word2vec", "doc2vec"),
+        choices=("word2vec",),
         default=SlimConfig.semantic_embedding_method,
     )
     parser.add_argument("--semantic_mode", default=SlimConfig.semantic_mode)
@@ -18804,23 +18098,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--word2vec_oov_policy",
         choices=("unk", "zero"),
         default=SlimConfig.word2vec_oov_policy,
-    )
-    parser.add_argument("--doc2vec_window", type=int, default=SlimConfig.doc2vec_window)
-    parser.add_argument("--doc2vec_min_count", type=int, default=SlimConfig.doc2vec_min_count)
-    parser.add_argument("--doc2vec_dm", type=int, default=SlimConfig.doc2vec_dm)
-    parser.add_argument("--doc2vec_negative", type=int, default=SlimConfig.doc2vec_negative)
-    parser.add_argument("--doc2vec_epochs", type=int, default=SlimConfig.doc2vec_epochs)
-    parser.add_argument("--doc2vec_workers", type=int, default=SlimConfig.doc2vec_workers)
-    parser.add_argument("--doc2vec_seed", type=int, default=SlimConfig.doc2vec_seed)
-    parser.add_argument(
-        "--doc2vec_infer_epochs",
-        type=int,
-        default=SlimConfig.doc2vec_infer_epochs,
-    )
-    parser.add_argument(
-        "--doc2vec_infer_alpha",
-        type=float,
-        default=SlimConfig.doc2vec_infer_alpha,
     )
     parser.add_argument(
         "--theia_netflow_policy",
@@ -18921,11 +18198,7 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
         raise ValueError(
             "SSPM_SCORE_TARGET_MODE=node_pair_no_action requires conditional_action_semantic",
         )
-    if str(config.sspm_score_head) in {
-        "action_predict",
-        "conditional_action_semantic",
-        CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD,
-    }:
+    if str(config.sspm_score_head) == "conditional_action_semantic":
         if str(config.sspm_target_mode) != "node_action_semantic_mean":
             raise ValueError(
                 f"{config.sspm_score_head} requires SSPM_TARGET_MODE=node_action_semantic_mean",
@@ -18934,10 +18207,7 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
             raise ValueError(f"{config.sspm_score_head} v1 requires NODE_REPR_FUSION=simple_mean")
         if int(config.rank) <= 0:
             raise ValueError(f"{config.sspm_score_head} requires positive rank")
-    if str(config.sspm_score_head) in {
-        "conditional_action_semantic",
-        CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD,
-    }:
+    if str(config.sspm_score_head) == "conditional_action_semantic":
         if str(config.conditional_semantic_loss) not in {"cosine", "mse"}:
             raise ValueError("CONDITIONAL_SEMANTIC_LOSS must be cosine or mse")
         allowed_conditional_modes = {
@@ -18945,8 +18215,6 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
             "quantile",
             CONDITIONAL_GROUP_THRESHOLD_MODE,
         }
-        if str(config.sspm_score_head) == CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD:
-            allowed_conditional_modes = {"quantile", "validation_max"}
         if str(config.event_threshold_mode) not in allowed_conditional_modes:
             raise ValueError(
                 f"{config.sspm_score_head} does not support event_threshold_mode="
@@ -19044,9 +18312,7 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
         if (
             str(config.sspm_score_head)
             not in {
-                "action_predict",
                 "conditional_action_semantic",
-                CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD,
             }
             and str(config.sspm_residual_score_mode) != "legacy"
         ):
@@ -19387,7 +18653,7 @@ def _residual_audit_base_row(
         theia_netflow_policy=config.theia_netflow_policy,
         semantic_mode=config.semantic_mode,
     )
-    tokens = list(SemanticSketchSlim._text_tokens(text))
+    tokens = list(residual_text_tokens(text))
     latent_dim = int(config.latent_dim)
     projection, nonzero = _residual_projection(tokens, latent_dim)
     return {
