@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - dependency checked at runtime.
     psycopg2 = None
 
 from cs4m.config.config import DATASET_DEFAULT_CONFIG
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     SLIM_SPLIT_OVERRIDES,
     SlimConfig,
     build_node_maps,
@@ -384,7 +384,7 @@ def export_trace(args: argparse.Namespace) -> int:
                     for row in rows
                 )
         if bool(args.malicious_pair_only):
-            from scripts.tools.causal_semantics_slim import MALICIOUS_PAIR_AUDIT_FIELDS
+            from legacy.compatibility.pipeline_runtime_exports import MALICIOUS_PAIR_AUDIT_FIELDS
 
             write_trace_csv_with_fields(args.output, output_rows, MALICIOUS_PAIR_AUDIT_FIELDS)
         else:

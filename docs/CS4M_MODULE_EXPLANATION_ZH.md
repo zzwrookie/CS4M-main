@@ -18,21 +18,23 @@ CS4M 是一个基于 provenance event stream 的在线威胁检测项目。核�
 原始数据库事件
   -> 数据集/OS 语义适配
   -> residual tokens / Word2Vec 嵌入
-  -> Phase3E 节点、动作、上下文缓存
-  -> SSPM 低秩流式状态模型
-  -> Phase3G conditional head
+  -> Phase3E 事件索引、节点/动作表
+  -> Phase3E 在线状态运行时读写 h_src/h_dst
+  -> Phase3G conditional head 产生最终 event score
   -> 在线 event alerts
 ```
 
 ## 2. Phase3E 与 Phase3G 的区别
 
-Phase3E 负责把事件流转换成可复用的训练/推理缓存。它关注“表示”和“上下文”：
+Phase3E 负责把事件流转换成可复用的表示，并在推理时维护在线状态。它关注“表示”和
+“状态运行时”：
 
 - 事件索引 memmap；
 - 节点 embedding 表；
 - 动作 embedding 表；
-- `X_context` 上下文矩阵；
-- 基础低秩 head 训练辅助。
+- `h_src` / `h_dst` 的读写；
+- S4D/EMA 状态更新规则；
+- 旧版 `X_context` 和基础低秩 head 已移动到 `legacy/compatibility/`。
 
 Phase3G 负责在 Phase3E 产物之上构建更细的 scoring head。它关注“当前事件是否异常”：
 
@@ -48,15 +50,37 @@ Phase3E:
   src_embedding(P) = [0.2, 0.1]
   action_embedding(READ) = [0.0, 0.4]
   dst_embedding(F) = [0.3, 0.2]
-  X_context = concat(src_state, dst_state, action_features, type_features)
+  读取旧状态 h_src_old / h_dst_old
+  先构造 scoring context，再更新 h_src / h_dst
 
 Phase3G:
-  conditional head 预测 target = f(X_context)
+  src_repr = mean(src_embedding, h_src_old)
+  dst_repr = mean(dst_embedding, h_dst_old)
+  x_G = concat(src_repr, dst_repr, src_type, dst_type)
+  conditional head 预测 target = f(x_G)
   true target 可能是 mean(src, action, dst)
   score = distance(predicted target, true target)
 ```
 
-Phase3E 是“把数据变成可计算的表示”，Phase3G 是“用这些表示产生异常分数”。
+当前 E4/S4D/update_gate=none 最佳默认路径不再生成 146 维 Phase3E `X_context.memmap`，
+也不再用 Phase3E 低秩 head 的 `c1/c2/bias` 作为最终事件分数。Phase3E 仍然保留在线状态机：
+读取 `h_src_old` / `h_dst_old`、按 context-before-update 顺序打分、再按 S4D/EMA 规则更新状态。
+最终分数来自 Phase3G conditional head。
+
+维度例子：
+
+```text
+latent_dim = 64
+ENTITY_TYPES = [process, file, flow, other]  # 4 维 one-hot
+
+x_G = [src_repr, dst_repr, src_type, dst_type]
+dim(x_G) = 64 + 64 + 4 + 4 = 136
+```
+
+旧的 146 维 Phase3E `X_context = [h_src, h_dst, action_one_hot, src_type, dst_type]`
+和 Phase3E 低秩 head 只保留在 `legacy/compatibility/` 中。当前 active CLI 不再暴露
+Phase3E precompute 或 `--x_context_*` 参数，因此它们不是当前 E4 最佳默认路径。
+E5/update_gate=quantile 可能仍依赖旧校准或 checkpoint 字段，需要单独验证。
 
 ## 3. `cs4m/config/`
 
@@ -192,24 +216,19 @@ action table:
 
 一个事件 `(node 0, READ, node 1)` 的 action-semantic target 可以由这三部分组合。
 
-### `context_memmap.py`
+### `legacy/compatibility/phase3e_context_memmap.py`
 
-构建 Phase3E `X_context`。这是模型输入矩阵，每一行对应一个事件的上下文。
+构建旧版 Phase3E `X_context`。这是历史 Phase3E 低秩 head 的输入矩阵，每一行对应一个事件的
+146 维上下文。
 
-当前最佳链路的 Phase3E context 由 runner 参数控制。本轮检查发现 CADETS/THEIA 最佳链
-仍显式传入：
+当前 E4 最佳默认路径不再生成该 memmap；active CLI 不再提供旧 X_context 参数。
+如果旧 checkpoint/cache 依赖 `action_one_hot` 或 `raw_orthrus10`，它属于历史兼容风险，
+而不是 Phase3G final scoring 的核心输入。
 
-```text
---sspm_context_action_mode raw_orthrus10
-```
+### `legacy/compatibility/phase3e_head_training.py`
 
-因此不能在没有重新验证 checkpoint/cache 兼容性的情况下强行删除这一路径。新的主链说明不再
-把 action one-hot 当作推荐策略；它只是当前已验证 checkpoint 仍依赖的兼容输入形态。
-
-### `head_training.py`
-
-Torch 低秩 head 训练辅助。它本身是工具模块；是否训练由 runner 参数控制。本仓库清理和
-验证命令不会运行训练。
+Torch 低秩 head 训练辅助。它服务旧 Phase3E `X_context`/`c1/c2/bias` 路径；当前 E4 最佳默认
+路径不训练 Phase3E 低秩 head，也不把它作为最终评分头。
 
 ## 7. `cs4m/phase3g/`
 
@@ -245,11 +264,11 @@ compact map:
 小例子：
 
 ```text
-X_context = [0.1, 0.2, 0.0, 0.3]
+x_G = [src_repr, dst_repr, src_type_one_hot, dst_type_one_hot]
 W1 = [[1, 0], [0, 1], [1, 1], [0, 1]]
 W2 = [[0.5, 0.0], [0.0, 0.5]]
 
-hidden = X_context @ W1
+hidden = x_G @ W1
 pred = hidden @ W2
 distance(pred, target) -> event score
 ```
@@ -260,7 +279,9 @@ distance(pred, target) -> event score
 
 ### `cs4m_lowrank.py`
 
-当前 SSPM 主模型。它维护流式 node state，并用低秩矩阵预测当前事件语义目标。
+当前 SSPM 状态运行时和兼容低秩模型。它维护流式 node state。对于当前 E4 最佳路径，
+`cs4m_lowrank.py` 的关键职责是在线读取/更新 `h_src` 和 `h_dst`；最终事件分数由
+`phase3g/conditional_head.py` 计算，而不是由 Phase3E 的 `c1/c2/bias` 计算。
 
 低秩结构：
 
@@ -276,8 +297,9 @@ W2 shape: [2, 3]
 prediction = X @ W1 @ W2
 ```
 
-这样参数量从 `4 * 3 = 12` 变为 `4 * 2 + 2 * 3 = 14`。真实模型维度更大时，低秩结构能控制
-参数和内存，并与在线状态更新结合。
+这样参数量从 `4 * 3 = 12` 变为 `4 * 2 + 2 * 3 = 14`。这个低秩预测头现在主要保留给
+Phase3E 兼容路径；E4 最佳默认路径使用同一个模型对象的状态机，但用 Phase3G conditional
+head 的低秩矩阵做最终预测。
 
 ## 9. `cs4m/scoring/`
 
@@ -299,9 +321,9 @@ node_pair_no_action   = mean(src_embedding, dst_embedding)
 
 ### `simple_gates.py`
 
-固定动作 gate、当前 active runner 仍依赖的 raw ORTHRUS10 action context，以及简单的更新
-权重逻辑。`cs4m_lowrank.py` 和主 runner 都会使用。注意：本轮检查发现 CADETS/THEIA
-最佳链 runner 仍传入 `--sspm_context_action_mode raw_orthrus10`，所以这里不能强制删除。
+固定动作 gate、旧版 raw ORTHRUS10 action context 兼容工具，以及简单的更新权重逻辑。
+当前 E4 Phase3G final scoring 不把 `action_one_hot` 作为 `x_G` 的组成部分；它只可能出现在
+旧 Phase3E `X_context`/低秩 head 兼容路径里。
 
 ## 10. `cs4m/state/`
 
@@ -351,8 +373,8 @@ SQLite residual embedding cache。用于避免重复计算相同 token 序列的
 |---|---|---|---|
 | `semantics/*` | `cadets_freebsd.py` | `theia_linux.py` | `clearscope_android.py` |
 | `embeddings/residual.py` | 使用 | 使用 | 训练/烟测使用 |
-| `phase3e/*` | 最佳链缓存 | 最佳链缓存 | 可复用 |
-| `models/cs4m_lowrank.py` | E4/E2/E5 base state | E4 base state | 可复用 |
+| `phase3e/*` | E4 状态运行时缓存 | E4 状态运行时缓存 | 可复用 |
+| `models/cs4m_lowrank.py` | E4 在线状态运行时 | E4 在线状态运行时 | 可复用 |
 | `phase3g/conditional_head.py` | dual-head v2/Q09995 | shared lowrank v1 | 可复用 |
 | `scoring/target_builder.py` | event-action target | event-action target | 可复用 |
 
@@ -377,3 +399,46 @@ legacy/diagnostics/export_residual_semantic_trace.py
 
 当前 CADETS/THEIA 最佳链路集中在 `cs4m/phase3g/conditional_head.py`，不再把这些历史实现
 作为 active main-chain 模块。
+
+## 15. `scripts/` 当前组织
+
+active runner 现在调用 `python3 -m scripts.pipeline.entrypoints.conditional_e4`。
+`scripts/tools/causal_semantics_slim.py` 已移到 `legacy/tools/`，只作为历史入口保留。
+active 实现已经按真实职责拆到 `scripts/pipeline/` 子包：
+
+```text
+scripts/pipeline/entrypoints/conditional_e4.py  # active shell runner 调用的 Python 入口
+scripts/pipeline/entrypoints/arguments.py       # 参数、配置校验、顶层调度
+scripts/pipeline/config/runtime_config.py       # 共享常量、SlimConfig、轻量运行时类
+scripts/pipeline/checks/preflight.py            # split/DB stream 与 residual preflight
+scripts/pipeline/state/online_state_runtime.py  # Phase3E 状态运行时与 h_src/h_dst 更新
+scripts/pipeline/features/conditional_context.py# 136-dim x_G 与 conditional score stream
+scripts/pipeline/features/semantic_features.py  # 数据集语义文本、residual text、校准
+scripts/pipeline/conditional/train.py           # conditional head / memmap 构建入口
+scripts/pipeline/conditional/infer.py           # Phase3G conditional 推理入口
+scripts/pipeline/io/conditional_cache.py        # memmap/cache 路径与元数据
+scripts/pipeline/io/event_artifacts.py          # active Phase3E artifact 与旧路径保护
+scripts/pipeline/io/db_stream.py                # 数据库事件流 helper
+scripts/pipeline/io/cache_payloads.py           # cache payload 读写
+scripts/pipeline/outputs/alert_output.py        # online_event_alerts 与评估输出
+scripts/pipeline/outputs/conditional_reports.py # group/coverage/RSS 报告
+scripts/pipeline/outputs/evaluation.py          # 评估辅助，不参与在线阈值选择
+scripts/pipeline/outputs/metrics_summary.py     # 简洁运行摘要
+scripts/pipeline/compatibility/                 # 临时 namespace bridge，仅供旧 import 调用
+```
+
+更详细的中文说明、每个 active Python 文件和 shell runner 的用途、以及小型数值例子见：
+`docs/SCRIPTS_PIPELINE_EXPLANATION_ZH.md`。
+
+Active `scripts/run/` 只保留当前 E4 主链路相关 runner：
+
+```text
+run_cadets_e3_e4_conditional_v2_q09995.sh
+run_cadets_e3_phase3e_node_action_semantic_full.sh
+run_phase3g_theia_e3_e4_theia_v1_lazy100k_pair_only_full.sh
+build_theia_e3_phase3g_conditional_memmaps.sh
+```
+
+旧的 E2/E4/E5 多消融 runner、训练 runner、smoke、summarizer 和诊断脚本已经移动到
+`legacy/runners/`、`legacy/tools/` 或 `legacy/diagnostics/`。这表示它们仍可作为历史记录
+检查，但不再混在 active mainline 脚本里。

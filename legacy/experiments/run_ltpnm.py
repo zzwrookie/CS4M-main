@@ -56,8 +56,8 @@ from scripts.data.get_dataset import (
     tokenize_msg,
     use_event_type_filter,
 )
-from scripts.tools.db_stream_utils import _cfg_for_dataset, _query_count, _stream_events
-from scripts.tools.eval_utils import memory_snapshot, target_for_dataset
+from scripts.pipeline.io.db_stream import _cfg_for_dataset, _query_count, _stream_events
+from scripts.pipeline.outputs.evaluation import memory_snapshot, target_for_dataset
 from legacy.experiments.ltpnm import (
     LTPNM_COMPONENT_NAMES,
     LTPNMEncoderConfig,

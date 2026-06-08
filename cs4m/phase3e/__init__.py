@@ -1,2 +1,1 @@
-"""Phase3E event-index, context, and training helpers."""
-
+"""Phase3E event-index helpers retained for the online state runtime."""

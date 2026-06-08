@@ -26,7 +26,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from cs4m.config.provnet_utils import init_database_connection
-from scripts.tools.causal_semantics_slim import (
+from legacy.compatibility.pipeline_runtime_exports import (
     SlimConfig,
     _cfg_for_dataset,
     _empirical_tail_score_compact,
@@ -379,7 +379,7 @@ def _score_full_stream(
                     dataset=config.dataset,
                     process_semantic_config=process_cfg,
                 )
-                from scripts.tools.causal_semantics_slim import _encode_row
+                from legacy.compatibility.pipeline_runtime_exports import _encode_row
 
                 z = _encode_row(embedder, row, config, process_cfg)
                 residual_score = model.residual_score(model.predict(fields), z)

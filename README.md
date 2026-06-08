@@ -33,9 +33,9 @@ Dataset-specific semantic implementations are intentional variants, not duplicat
 
 CADETS_E3 best chain:
 
-- Wrapper: `scripts/run/run_phase3g_cadets_e3_dual_head_v2_q09995_e2_e4_e5_full.sh`
+- Wrapper: `scripts/run/run_cadets_e3_e4_conditional_v2_q09995.sh`
 - Base runner: `scripts/run/run_cadets_e3_phase3e_node_action_semantic_full.sh`
-- Python entrypoint: `scripts/tools/causal_semantics_slim.py`
+- Python entrypoint: `python3 -m scripts.pipeline.entrypoints.conditional_e4`
 - Best family: `CADETS_E3_PHASE3E_E4_NONE`
 - Conditional head: `dual_lowrank_by_target_case_v2`
 - Threshold policy: `conditional_target_action_type_group_quantile`
@@ -45,7 +45,7 @@ THEIA_E3 best chain:
 
 - Wrapper: `scripts/run/run_phase3g_theia_e3_e4_theia_v1_lazy100k_pair_only_full.sh`
 - Base runner: `scripts/run/run_cadets_e3_phase3e_node_action_semantic_full.sh`
-- Python entrypoint: `scripts/tools/causal_semantics_slim.py`
+- Python entrypoint: `python3 -m scripts.pipeline.entrypoints.conditional_e4`
 - Best family: `THEIA_E3_PHASE3E_E4_NONE`
 - Conditional head: `shared_lowrank_v1`
 - Alert policy: `theia_v1`
@@ -54,6 +54,23 @@ THEIA_E3 best chain:
 
 `theia_v1` is an alert policy name, not evidence that the model is obsolete.
 
+Current E4/S4D/default scoring contract:
+
+- Phase3E is kept as the online state runtime. It reads `h_src`/`h_dst`, builds
+  context before updating state, and applies the configured S4D/EMA update rules.
+- The active E4 best path does not generate or require the 146-dim Phase3E
+  `X_context.memmap` by default.
+- The active E4 best path does not use the Phase3E low-rank `c1/c2/bias` head as the
+  final event score.
+- Final scoring comes from the Phase3G conditional head. For latent dim 64, its context is
+  `x_G = [src_repr, dst_repr, src_type, dst_type]`, where
+  `src_repr = mean(e_src, h_src_old)` and `dst_repr = mean(e_dst, h_dst_old)` when online
+  state exists. The dimension is `64 + 64 + 4 + 4 = 136`.
+- The old Phase3E `X_context`/low-rank-head path is legacy-only. The active CLI no longer
+  exposes Phase3E precompute or `--x_context_*` flags.
+- E5/update-gate behavior still needs separate validation because it can depend on old
+  calibration/checkpoint fields.
+
 ## Directory Structure
 
 - `cs4m/`: importable core package. The root contains only `__init__.py`; implementation
@@ -61,16 +78,19 @@ THEIA_E3 best chain:
 - `cs4m/config/`: importable dataset/database/runtime config helpers and `clad.yml`.
 - `cs4m/semantics/`: dataset/OS semantic adapters, semantic dispatch, and residual tokenizers.
 - `cs4m/embeddings/`: residual embedding builders and state-dict loaders.
-- `cs4m/phase3e/`: event-index memmaps, Word2Vec adapters, semantic tables, X-context, and
-  Torch head training helpers.
+- `cs4m/phase3e/`: active event-index memmaps, Word2Vec adapters, and semantic tables.
 - `cs4m/phase3g/`: compact used-node artifacts and active Phase3G conditional heads.
 - `cs4m/scoring/`: score-target builders, calibration, and gates.
 - `cs4m/state/`: streaming state dynamics, bounded state memory, and online state merging.
 - `cs4m/models/`: CS4M low-rank streaming model implementations.
 - `cs4m/utils/`: shared hashing, type, row, cache, and profiling utilities.
-- `configs/`: YAML experiment and process-semantic presets only.
-- `scripts/run/`: shell wrappers for bounded preflight, dry-run, training, and inference flows.
-- `scripts/tools/`: Python entrypoints, smoke checks, export tools, and summarizers.
+- `configs/`: active YAML presets only. The active default is
+  `configs/common/process_semantics.yaml`.
+- `scripts/run/`: active bounded shell wrappers for CADETS_E3/THEIA_E3 E4 conditional paths
+  and THEIA conditional memmap generation.
+- `scripts/tools/`: no active Python entrypoints; old tools live under `legacy/tools/`.
+- `scripts/pipeline/`: active Python pipeline modules for CLI delegation, conditional
+  train/infer, online state runtime, cache IO, DB streaming, and metrics summaries.
 - `scripts/data/`, `scripts/eval/`: dataset split helpers and post-inference evaluation helpers.
 - `legacy/`: diagnostics, historical baseline models, old runners, and experiments.
 - `outputs/`, `tmp/`, `logs/`: generated artifacts and local run logs.
@@ -91,12 +111,12 @@ Active modules in the current CADETS/THEIA or common E3/E5 pipeline:
 - `cs4m/phase3e/event_index.py`: compact event-index dtype, fingerprints, and memmap IO.
 - `cs4m/phase3e/word2vec_adapter.py`: Word2Vec adapter fingerprinting.
 - `cs4m/phase3e/node_action_tables.py`: node/action embedding tables and coverage audits.
-- `cs4m/phase3e/context_memmap.py`: Phase3E `X_context` memmaps.
-- `cs4m/phase3e/head_training.py`: Torch low-rank head training helper.
 - `cs4m/phase3g/compact_node_embeddings.py`: compact used-node embeddings and remapped indexes.
 - `cs4m/phase3g/conditional_head.py`: shared/dual conditional semantic heads and thresholds.
 - `cs4m/scoring/target_builder.py`: event/action and node-pair score targets.
-- `cs4m/models/cs4m_lowrank.py`: current SSPM low-rank streaming model.
+- `cs4m/models/cs4m_lowrank.py`: SSPM streaming state runtime and compatibility low-rank
+  head implementation. In the E4 best path, its state machine is used for `h_src`/`h_dst`
+  read/update; Phase3G provides the final event score.
 - `cs4m/state/state_models.py`, `state_memory.py`, `online_state_merging.py`: state dynamics,
   bounded memory, and online state merging.
 - `cs4m/scoring/calibration.py`, `simple_gates.py`: residual calibration and update gates.
@@ -114,9 +134,53 @@ Historical baselines and optional experiments:
   CADETS/THEIA best chains use `cs4m/phase3g/conditional_head.py`.
 - `legacy/experiments/residual_hash_doc2vec.py`: historical signed hash-sketch and Doc2Vec
   residual embedders. Active CADETS/THEIA best chains use residual Word2Vec.
+- `legacy/compatibility/phase3e_context_memmap.py`: historical 146-dim Phase3E
+  `X_context` builder.
+- `legacy/compatibility/phase3e_head_training.py`: historical Phase3E low-rank
+  `c1/c2/bias` head trainer.
+- `legacy/runners/run_phase3g_cadets_e3_dual_head_v2_q09995_e2_e4_e5_full.sh`: old
+  E2/E4/E5 CADETS ablation wrapper. The active CADETS wrapper is E4-only.
 
 No root compatibility shims are kept. Active and legacy code import from the final subpackage
 or `legacy/` paths directly.
+
+## Active Script Boundary
+
+Active runners call `python3 -m scripts.pipeline.entrypoints.conditional_e4`. The old
+`scripts/tools/causal_semantics_slim.py` wrapper is legacy-only. The active implementation
+surface is organized by responsibility under `scripts/pipeline/`:
+
+- `entrypoints/conditional_e4.py`: executable module used by active shell runners.
+- `entrypoints/arguments.py`: CLI arguments, config validation, and top-level dispatch.
+- `config/runtime_config.py`: shared constants, imports, lightweight runtime classes, and
+  `SlimConfig`.
+- `checks/preflight.py`: split/DB-stream setup and residual embedding preflight helpers.
+- `state/online_state_runtime.py`: Phase3E checkpoint/state runtime and h_src/h_dst
+  read-update helpers.
+- `features/conditional_context.py`: 136-dim Phase3G context construction, endpoint
+  suppression, and conditional score streams.
+- `features/semantic_features.py`: dataset semantic text, action family, residual text, and
+  score calibration helpers.
+- `conditional/train.py`: Phase3G conditional train memmap and head training entrypoints.
+- `conditional/infer.py`: Phase3G conditional load-and-infer entrypoints.
+- `io/conditional_cache.py`: conditional memmap/cache path and validation-cache helpers.
+- `io/event_artifacts.py`: active Phase3E node/action/event-index artifact paths.
+- `io/db_stream.py`, `io/cache_payloads.py`: DB streaming and cache payload persistence.
+- `outputs/alert_output.py`: online alert output and post-stream evaluation payload helpers.
+- `outputs/conditional_reports.py`: conditional group, coverage, RSS, and backfill reports.
+- `outputs/evaluation.py`, `outputs/metrics_summary.py`: post-inference evaluation helpers and
+  compact runtime/model summaries.
+The old namespace bridge and aggregate runtime exports are no longer under `scripts/pipeline/`.
+Legacy callers that still need monolith-style imports use
+`legacy/compatibility/pipeline_runtime_exports.py` or
+`legacy/compatibility/pipeline_namespace_bridge.py`.
+
+Chinese file-by-file script documentation is in `docs/SCRIPTS_PIPELINE_EXPLANATION_ZH.md`.
+
+Active `scripts/run/` keeps only the CADETS_E3 E4 conditional path, the THEIA_E3 E4/theia_v1
+conditional path, and THEIA conditional memmap generation. Old multi-ablation, training,
+smoke, summarizer, and diagnostic scripts have moved to `legacy/runners/`, `legacy/tools/`,
+or `legacy/diagnostics/`.
 
 Moved to legacy:
 
@@ -125,12 +189,12 @@ Moved to legacy:
 
 ## Config Organization
 
-`cs4m/config/` is the importable Python config package. `configs/` is intentionally retained for YAML:
+`cs4m/config/` is the importable Python config package. `configs/` is intentionally retained for
+active YAML:
 
 - `configs/common/process_semantics.yaml`
-- `configs/common/tflr_cssm_unified.yaml`
-- `configs/experimental/process_semantics_v2_coarse_nll.yaml`
-- `configs/experimental/process_semantics_v3_process_kind_nll.yaml`
+
+Historical CSSM and experimental process-semantic presets have moved to `legacy/configs/`.
 
 Database host/user/port/password must come from environment variables, not committed files.
 
@@ -174,13 +238,14 @@ Static checks:
 python3 -m compileall -q cs4m scripts utils legacy
 bash -n scripts/run/*.sh legacy/runners/*.sh
 PYTHONDONTWRITEBYTECODE=1 python3 -c "import cs4m; print('cs4m-import-ok')"
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/tools/causal_semantics_slim.py --help
+PYTHONDONTWRITEBYTECODE=1 python3 -m scripts.pipeline.entrypoints.conditional_e4 --help
 ```
 
 Focused tests added in this cleanup:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v tests.test_phase3g_memmap_only
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v tests.test_best_chain_cleanup_contract
 ```
 
 CADETS dry-run/preflight:
@@ -220,5 +285,6 @@ find outputs/cache/phase3g_action_validation/THEIA_E3/conditional_train_memmaps 
 
 The runner uses `dataset=THEIA_E3`, `state_family=E4`, `alert_policy=theia_v1`,
 `conditional_head=shared_lowrank_v1`, and `threshold_quantile=0.999`. It stops after building
-train-only conditional memmaps; it does not train, infer, evaluate, fabricate files, use CADETS
-artifacts, or read ground truth.
+train-only Phase3G conditional memmaps (`X_conditional`, `Y_conditional`, `target_case`); it
+does not build the 146-dim Phase3E `X_context.memmap`, train, infer, evaluate, fabricate files,
+use CADETS artifacts, or read ground truth.
