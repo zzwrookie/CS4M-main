@@ -46,6 +46,9 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
         self.assertIn("--action_type_alert_policy default", output)
         self.assertIn("--conditional_endpoint_aware_suppression false", output)
         self.assertIn("--conditional_endpoint_suppression_read false", output)
+        self.assertIn("--conditional_endpoint_suppression_mode pair_only", output)
+        self.assertIn("--conditional_low_support_policy conservative_max", output)
+        self.assertIn("--conditional_low_support_margin 0.05", output)
         self.assertIn("--sspm_state_model s4d_complex_node", output)
         self.assertIn("--sspm_conditional_head_arch shared_lowrank_v1", output)
 
@@ -56,6 +59,7 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
             ACTION_TYPE_ALERT_POLICY="clearscope_android_v2",
             CONDITIONAL_ENDPOINT_AWARE_SUPPRESSION="true",
             CONDITIONAL_ENDPOINT_SUPPRESSION_READ="true",
+            CONDITIONAL_ENDPOINT_SUPPRESSION_MODE="pair_then_endpoint",
             CONDITIONAL_LOW_SUPPORT_POLICY="adaptive_margin",
             CONDITIONAL_LOW_SUPPORT_MARGIN="0.07",
             SSPM_STATE_MODEL="ema_fixed",
@@ -73,6 +77,7 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
         self.assertIn("--action_type_alert_policy clearscope_android_v2", output)
         self.assertIn("--conditional_endpoint_aware_suppression true", output)
         self.assertIn("--conditional_endpoint_suppression_read true", output)
+        self.assertIn("--conditional_endpoint_suppression_mode pair_then_endpoint", output)
         self.assertIn("--conditional_low_support_policy adaptive_margin", output)
         self.assertIn("--conditional_low_support_margin 0.07", output)
         self.assertIn("--sspm_state_model ema_fixed", output)
