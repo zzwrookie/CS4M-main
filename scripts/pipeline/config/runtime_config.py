@@ -1221,6 +1221,7 @@ class SlimConfig:
     conditional_low_support_policy: str = CONDITIONAL_LOW_SUPPORT_POLICY_DEFAULT
     conditional_low_support_margin: float = CONDITIONAL_LOW_SUPPORT_MARGIN_DEFAULT
     conditional_unseen_group_policy: str = CONDITIONAL_UNSEEN_GROUP_POLICY_DEFAULT
+    conditional_both_cold_unseen_policy: str = "alert"
     conditional_global_extreme_quantile: float = CONDITIONAL_GLOBAL_EXTREME_QUANTILE_DEFAULT
     conditional_adaptive_margin_n1: int = CONDITIONAL_ADAPTIVE_MARGIN_N1_DEFAULT
     conditional_adaptive_margin_n2: int = CONDITIONAL_ADAPTIVE_MARGIN_N2_DEFAULT

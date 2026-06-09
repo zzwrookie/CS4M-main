@@ -5,6 +5,23 @@ from __future__ import annotations
 from scripts.pipeline.config.runtime_config import *
 
 
+def _phase3g_should_suppress_both_cold_unseen_alert(
+    *,
+    config: SlimConfig,
+    target_case: str,
+    threshold_level: str,
+    validation_group_count: int,
+) -> bool:
+    """Return true when both_cold unseen groups should remain observation-only."""
+    if str(config.conditional_both_cold_unseen_policy) != "observation_only_no_alert":
+        return False
+    if str(target_case) != BOTH_COLD_ACTION_TARGET:
+        return False
+    if str(threshold_level) != "unseen_group_extreme":
+        return False
+    return int(validation_group_count) <= 0
+
+
 
 def _score_phase3g_conditional_fast_stream(
     *,
@@ -60,6 +77,7 @@ def _score_phase3g_conditional_fast_stream(
     q_t_by_group: dict[tuple[int, int, int], dict[str, Any]] = {}
     raw_alert_count_before_suppression = 0
     suppressed_alert_count = 0
+    both_cold_unseen_suppressed_alert_count = 0
     action_policy_counts: dict[tuple[int, int, int], dict[str, Any]] = {}
     node_evidence_count = 0
     demoted_event_count = 0
@@ -466,70 +484,90 @@ def _score_phase3g_conditional_fast_stream(
                     alert_row["threshold_group_key"] = threshold_group_key
                     alert_row["validation_group_count"] = validation_group_count
                     alert_row.update(threshold_trace)
-                    suppression_started = time.perf_counter()
-                    suppression = _conditional_endpoint_suppression_decision(
+                    suppress_both_cold_unseen = _phase3g_should_suppress_both_cold_unseen_alert(
                         config=config,
-                        row=row,
-                        event_score=event_score,
-                        threshold=threshold_value,
-                        pair_counts=endpoint_pair_counts,
-                        src_endpoint_counts=endpoint_src_endpoint_counts,
-                        endpoint_counts=endpoint_counts,
-                        netflow_endpoint_by_idx=netflow_endpoint_by_idx,
-                        endpoint_lookup=endpoint_lookup,
+                        target_case=target_case,
+                        threshold_level=threshold_level,
+                        validation_group_count=validation_group_count,
                     )
-                    endpoint_suppression_seconds += time.perf_counter() - suppression_started
-                    endpoint_validation_pair_count = int(
-                        suppression.get("validation_pair_count", 0),
+                    alert_row["both_cold_unseen_policy"] = str(
+                        config.conditional_both_cold_unseen_policy,
                     )
-                    endpoint_validation_count = int(
-                        suppression.get("validation_endpoint_count", 0),
+                    alert_row["both_cold_unseen_suppressed"] = bool(
+                        suppress_both_cold_unseen,
                     )
-                    endpoint_src_endpoint_count = int(
-                        suppression.get("validation_src_endpoint_count", 0),
-                    )
-                    endpoint_match_level = str(suppression.get("match_level", "unknown"))
-                    alert_row["endpoint_signature"] = str(
-                        suppression.get("endpoint_signature", ""),
-                    )
-                    alert_row["endpoint_pair_key"] = str(suppression.get("pair_key", ""))
-                    alert_row["src_endpoint_key"] = str(
-                        suppression.get("src_endpoint_key", ""),
-                    )
-                    alert_row["endpoint_action_key"] = str(
-                        suppression.get("endpoint_action_key", ""),
-                    )
-                    alert_row["endpoint_validation_pair_count"] = endpoint_validation_pair_count
-                    alert_row["src_endpoint_count"] = endpoint_src_endpoint_count
-                    alert_row["endpoint_validation_count"] = endpoint_validation_count
-                    alert_row["endpoint_suppression_mode"] = str(
-                        suppression.get("suppression_mode", ""),
-                    )
-                    alert_row["endpoint_suppression_match_level"] = endpoint_match_level
-                    alert_row["endpoint_suppression_reason"] = str(
-                        suppression.get("suppression_reason", ""),
-                    )
-                    if bool(suppression.get("suppressed", False)):
+                    if suppress_both_cold_unseen:
                         alert = False
-                        suppressed_by_endpoint = True
-                        suppressed_alert_count += 1
-                        suppressed_row = dict(
-                            alert_row,
-                            endpoint_suppression_reason=str(
-                                suppression.get("suppression_reason", ""),
-                            ),
-                            endpoint_validation_pair_count=endpoint_validation_pair_count,
-                            src_endpoint_count=endpoint_src_endpoint_count,
-                            endpoint_validation_count=endpoint_validation_count,
-                            endpoint_suppression_mode=str(
-                                suppression.get("suppression_mode", ""),
-                            ),
-                            endpoint_suppression_match_level=endpoint_match_level,
+                        both_cold_unseen_suppressed_alert_count += 1
+                    if alert:
+                        suppression_started = time.perf_counter()
+                        suppression = _conditional_endpoint_suppression_decision(
+                            config=config,
+                            row=row,
+                            event_score=event_score,
+                            threshold=threshold_value,
+                            pair_counts=endpoint_pair_counts,
+                            src_endpoint_counts=endpoint_src_endpoint_counts,
+                            endpoint_counts=endpoint_counts,
+                            netflow_endpoint_by_idx=netflow_endpoint_by_idx,
+                            endpoint_lookup=endpoint_lookup,
                         )
-                        if suppressed_writer is not None:
-                            suppressed_writer.write_row(suppressed_row)
-                        elif not _online_minimal_enabled(config):
-                            suppressed_event_alerts_raw.append(suppressed_row)
+                        endpoint_suppression_seconds += time.perf_counter() - (
+                            suppression_started
+                        )
+                        endpoint_validation_pair_count = int(
+                            suppression.get("validation_pair_count", 0),
+                        )
+                        endpoint_validation_count = int(
+                            suppression.get("validation_endpoint_count", 0),
+                        )
+                        endpoint_src_endpoint_count = int(
+                            suppression.get("validation_src_endpoint_count", 0),
+                        )
+                        endpoint_match_level = str(suppression.get("match_level", "unknown"))
+                        alert_row["endpoint_signature"] = str(
+                            suppression.get("endpoint_signature", ""),
+                        )
+                        alert_row["endpoint_pair_key"] = str(suppression.get("pair_key", ""))
+                        alert_row["src_endpoint_key"] = str(
+                            suppression.get("src_endpoint_key", ""),
+                        )
+                        alert_row["endpoint_action_key"] = str(
+                            suppression.get("endpoint_action_key", ""),
+                        )
+                        alert_row["endpoint_validation_pair_count"] = (
+                            endpoint_validation_pair_count
+                        )
+                        alert_row["src_endpoint_count"] = endpoint_src_endpoint_count
+                        alert_row["endpoint_validation_count"] = endpoint_validation_count
+                        alert_row["endpoint_suppression_mode"] = str(
+                            suppression.get("suppression_mode", ""),
+                        )
+                        alert_row["endpoint_suppression_match_level"] = endpoint_match_level
+                        alert_row["endpoint_suppression_reason"] = str(
+                            suppression.get("suppression_reason", ""),
+                        )
+                        if bool(suppression.get("suppressed", False)):
+                            alert = False
+                            suppressed_by_endpoint = True
+                            suppressed_alert_count += 1
+                            suppressed_row = dict(
+                                alert_row,
+                                endpoint_suppression_reason=str(
+                                    suppression.get("suppression_reason", ""),
+                                ),
+                                endpoint_validation_pair_count=endpoint_validation_pair_count,
+                                src_endpoint_count=endpoint_src_endpoint_count,
+                                endpoint_validation_count=endpoint_validation_count,
+                                endpoint_suppression_mode=str(
+                                    suppression.get("suppression_mode", ""),
+                                ),
+                                endpoint_suppression_match_level=endpoint_match_level,
+                            )
+                            if suppressed_writer is not None:
+                                suppressed_writer.write_row(suppressed_row)
+                            elif not _online_minimal_enabled(config):
+                                suppressed_event_alerts_raw.append(suppressed_row)
                 policy_decision = _action_type_alert_policy_decision(
                     config=config,
                     row=row,
@@ -856,6 +894,9 @@ def _score_phase3g_conditional_fast_stream(
         "event_alert_count": int(event_alert_count),
         "raw_alert_count_before_suppression": int(raw_alert_count_before_suppression),
         "suppressed_alert_count": int(suppressed_alert_count),
+        "both_cold_unseen_suppressed_alert_count": int(
+            both_cold_unseen_suppressed_alert_count,
+        ),
         "node_evidence_count": int(node_evidence_count),
         "demoted_event_count": int(demoted_event_count),
         "budget_capped_event_count": int(budget_capped_event_count),
@@ -868,6 +909,10 @@ def _score_phase3g_conditional_fast_stream(
             "high_priority_event_alert_count": int(high_priority_event_alert_count),
             "node_evidence_events_csv": node_evidence_raw_path,
             "group_alert_policy_summary_csv": group_alert_policy_summary_path,
+        },
+        "both_cold_unseen_policy": {
+            "policy_name": str(config.conditional_both_cold_unseen_policy),
+            "suppressed_alert_count": int(both_cold_unseen_suppressed_alert_count),
         },
         "suppressed_event_alerts_raw": suppressed_event_alerts_raw,
         "suppressed_event_alerts_raw_csv": suppressed_raw_path,

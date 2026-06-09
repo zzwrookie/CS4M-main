@@ -204,6 +204,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=SlimConfig.conditional_unseen_group_policy,
     )
     parser.add_argument(
+        "--conditional_both_cold_unseen_policy",
+        choices=("alert", "observation_only_no_alert"),
+        default=SlimConfig.conditional_both_cold_unseen_policy,
+    )
+    parser.add_argument(
         "--conditional_global_extreme_quantile",
         type=float,
         default=SlimConfig.conditional_global_extreme_quantile,
@@ -725,6 +730,13 @@ def config_from_args(args: argparse.Namespace) -> SlimConfig:
     return config
 
 
+def validate_config(config: SlimConfig) -> None:
+    """Validate config values without requiring runtime artifacts."""
+    _validate_active_event_score_mode(config.event_score_mode)
+    _validate_phase3e_config(config)
+    validate_word2vec_semantic_mode_matches_config(config)
+
+
 def _validate_phase3e_config(config: SlimConfig) -> None:
     """Validate the Phase3E config surface without launching DB precompute."""
     if str(config.sspm_score_head) not in SSPM_SCORE_HEADS:
@@ -806,6 +818,14 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
             raise ValueError("conditional_low_support_margin must be non-negative")
         if str(config.conditional_unseen_group_policy) != "observation_only":
             raise ValueError("conditional_unseen_group_policy must be observation_only")
+        if str(config.conditional_both_cold_unseen_policy) not in {
+            "alert",
+            "observation_only_no_alert",
+        }:
+            raise ValueError(
+                "conditional_both_cold_unseen_policy must be alert or "
+                "observation_only_no_alert",
+            )
         if not (0.0 < float(config.conditional_global_extreme_quantile) <= 1.0):
             raise ValueError("conditional_global_extreme_quantile must be in (0, 1]")
         if (

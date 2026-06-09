@@ -22,6 +22,13 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
                 "DRY_RUN": "1",
                 "STAGE": "infer_full",
                 "CLAD_DB_PASSWORD": "dummy",
+                "PRETRAINED_RESIDUAL_EMBEDDER_PATH": "/missing/clearscope/v3/embedder.pkl",
+                "EVENT_INDEX_CACHE_DIR": "/missing/clearscope/v3/event_index",
+                "NODE_EMBEDDING_CACHE_DIR": "/missing/clearscope/v3/node_embeddings",
+                "ACTION_EMBEDDING_CACHE_DIR": "/missing/clearscope/v3/action_embeddings",
+                "COMPACT_USED_NODE_CACHE_DIR": "/missing/clearscope/v3/compact_nodes",
+                "SSPM_CHECKPOINT_PATH": "/missing/clearscope/v3/base.pkl",
+                "ACTION_HEAD_CHECKPOINT_PATH": "/missing/clearscope/v3/head.pkl",
             },
         )
         env.update(overrides)
@@ -35,6 +42,33 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         return result.stdout + result.stderr
+
+    def _run_dry_failure(self, **overrides: str) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "DRY_RUN": "1",
+                "STAGE": "infer_full",
+                "CLAD_DB_PASSWORD": "dummy",
+                "PRETRAINED_RESIDUAL_EMBEDDER_PATH": "/missing/clearscope/v3/embedder.pkl",
+                "EVENT_INDEX_CACHE_DIR": "/missing/clearscope/v3/event_index",
+                "NODE_EMBEDDING_CACHE_DIR": "/missing/clearscope/v3/node_embeddings",
+                "ACTION_EMBEDDING_CACHE_DIR": "/missing/clearscope/v3/action_embeddings",
+                "COMPACT_USED_NODE_CACHE_DIR": "/missing/clearscope/v3/compact_nodes",
+                "SSPM_CHECKPOINT_PATH": "/missing/clearscope/v3/base.pkl",
+                "ACTION_HEAD_CHECKPOINT_PATH": "/missing/clearscope/v3/head.pkl",
+            },
+        )
+        env.update(overrides)
+        return subprocess.run(
+            ["bash", str(RUNNER)],
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
     def test_runner_preserves_baseline_defaults(self) -> None:
         output = self._run_dry()
@@ -77,7 +111,10 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
         self.assertIn("--action_type_alert_policy clearscope_android_v2", output)
         self.assertIn("--conditional_endpoint_aware_suppression true", output)
         self.assertIn("--conditional_endpoint_suppression_read true", output)
-        self.assertIn("--conditional_endpoint_suppression_mode pair_then_endpoint", output)
+        self.assertIn(
+            "--conditional_endpoint_suppression_mode pair_then_endpoint",
+            output,
+        )
         self.assertIn("--conditional_low_support_policy adaptive_margin", output)
         self.assertIn("--conditional_low_support_margin 0.07", output)
         self.assertIn("--sspm_state_model ema_fixed", output)
@@ -89,6 +126,29 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
             "--conditional_both_cold_unseen_policy observation_only_no_alert",
             output,
         )
+
+    def test_policy_override_without_out_tag_override_fails(self) -> None:
+        result = self._run_dry_failure(
+            ACTION_TYPE_ALERT_POLICY="clearscope_android_v2",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("baseline infer_full out_tag protection", result.stderr)
+
+    def test_out_tag_override_with_all_stage_fails(self) -> None:
+        result = self._run_dry_failure(
+            STAGE="all",
+            OUT_TAG_OVERRIDE="CLEARSCOPE_E3_POLICY_EXPERIMENT",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "OUT_TAG_OVERRIDE is only supported with STAGE=infer_full",
+            result.stderr,
+        )
+
+    def test_out_tag_override_rejects_path_traversal(self) -> None:
+        result = self._run_dry_failure(OUT_TAG_OVERRIDE="../bad")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OUT_TAG_OVERRIDE must not contain", result.stderr)
 
 
 if __name__ == "__main__":

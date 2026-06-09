@@ -20,22 +20,34 @@ DATASET="${DATASET:-CLEARSCOPE_E3}"
 SEMANTIC_MODE="${SEMANTIC_MODE:-raw_detail_v3_discriminative}"
 STAGE="${STAGE:-all}"
 DRY_RUN="${DRY_RUN:-0}"
+BASELINE_INFER_OUT_TAG="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_INFER_FULL"
 RESULT_ROOT="${RESULT_ROOT:-${REPO_ROOT}/outputs/results/tflr_light}"
 PHASE3E_CACHE_ROOT="${PHASE3E_CACHE_ROOT:-${REPO_ROOT}/outputs/cache/phase3e}"
 LOG_DIR="${LOG_DIR:-${REPO_ROOT}/logs/clearscope_e3_v3_phase3e_phase3g}"
 CHECKPOINT_ROOT="${SSPM_BASE_CHECKPOINT_ROOT:-${REPO_ROOT}/outputs/models/sspm_phase3e}"
 ACTION_HEAD_ROOT="${ACTION_HEAD_CHECKPOINT_ROOT:-${REPO_ROOT}/outputs/models/phase3g_action_heads}"
-ACTION_VALIDATION_CACHE_DIR="${ACTION_VALIDATION_CACHE_DIR:-${REPO_ROOT}/outputs/cache/phase3g_action_validation/${DATASET}_v3}"
-ENDPOINT_CACHE_DIR="${CONDITIONAL_ENDPOINT_SUPPRESSION_CACHE_DIR:-${REPO_ROOT}/outputs/cache/phase3g_endpoint_suppression/${DATASET}_v3}"
+ACTION_VALIDATION_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_action_validation/${DATASET}_v3"
+ENDPOINT_CACHE_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_endpoint_suppression/${DATASET}_v3"
+ACTION_VALIDATION_CACHE_DIR="${ACTION_VALIDATION_CACHE_DIR:-${ACTION_VALIDATION_DEFAULT}}"
+ENDPOINT_CACHE_DIR="${CONDITIONAL_ENDPOINT_SUPPRESSION_CACHE_DIR:-${ENDPOINT_CACHE_DEFAULT}}"
 
-EMBEDDER_PATH="${PRETRAINED_RESIDUAL_EMBEDDER_PATH:-${REPO_ROOT}/outputs/models/residual_word2vec/CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_LATENT64_word2vec_window3.pkl}"
-NODE_CACHE_DIR="${NODE_EMBEDDING_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/node_embeddings/${DATASET}_latent64_v3}"
-ACTION_CACHE_DIR="${ACTION_EMBEDDING_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/action_embeddings/${DATASET}_latent64_v3}"
+EMBEDDER_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_LATENT64_word2vec_window3.pkl"
+EMBEDDER_DEFAULT="${REPO_ROOT}/outputs/models/residual_word2vec/${EMBEDDER_NAME}"
+EMBEDDER_PATH="${PRETRAINED_RESIDUAL_EMBEDDER_PATH:-${EMBEDDER_DEFAULT}}"
+NODE_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/node_embeddings/${DATASET}_latent64_v3"
+ACTION_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/action_embeddings/${DATASET}_latent64_v3"
+NODE_CACHE_DIR="${NODE_EMBEDDING_CACHE_DIR:-${NODE_CACHE_DEFAULT}}"
+ACTION_CACHE_DIR="${ACTION_EMBEDDING_CACHE_DIR:-${ACTION_CACHE_DEFAULT}}"
 EVENT_INDEX_CACHE_DIR="${EVENT_INDEX_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/event_indices/${DATASET}_v3}"
-COMPACT_USED_NODE_CACHE_DIR="${COMPACT_USED_NODE_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/compact_used_node_embeddings/${DATASET}_v3}"
+COMPACT_USED_NODE_DEFAULT="${PHASE3E_CACHE_ROOT}/compact_used_node_embeddings/${DATASET}_v3"
+COMPACT_USED_NODE_CACHE_DIR="${COMPACT_USED_NODE_CACHE_DIR:-${COMPACT_USED_NODE_DEFAULT}}"
 
-BASE_CHECKPOINT="${SSPM_CHECKPOINT_PATH:-${CHECKPOINT_ROOT}/CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3E_BASE_FULL.pkl}"
-ACTION_HEAD_CHECKPOINT="${ACTION_HEAD_CHECKPOINT_PATH:-${ACTION_HEAD_ROOT}/CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3G_CONDITIONAL_HEAD.pkl}"
+BASE_CHECKPOINT_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3E_BASE_FULL.pkl"
+ACTION_HEAD_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3G_CONDITIONAL_HEAD.pkl"
+BASE_CHECKPOINT_DEFAULT="${CHECKPOINT_ROOT}/${BASE_CHECKPOINT_NAME}"
+ACTION_HEAD_CHECKPOINT_DEFAULT="${ACTION_HEAD_ROOT}/${ACTION_HEAD_NAME}"
+BASE_CHECKPOINT="${SSPM_CHECKPOINT_PATH:-${BASE_CHECKPOINT_DEFAULT}}"
+ACTION_HEAD_CHECKPOINT="${ACTION_HEAD_CHECKPOINT_PATH:-${ACTION_HEAD_CHECKPOINT_DEFAULT}}"
 
 MAX_TRAIN_EVENTS="${MAX_TRAIN_EVENTS:-0}"
 MAX_REF_EVENTS="${MAX_REF_EVENTS:-0}"
@@ -57,6 +69,21 @@ CONDITIONAL_ENDPOINT_SUPPRESSION_MODE="${CONDITIONAL_ENDPOINT_SUPPRESSION_MODE:-
 CONDITIONAL_BOTH_COLD_UNSEEN_POLICY="${CONDITIONAL_BOTH_COLD_UNSEEN_POLICY:-alert}"
 SSPM_STATE_MODEL="${SSPM_STATE_MODEL:-s4d_complex_node}"
 SSPM_CONDITIONAL_HEAD_ARCH="${SSPM_CONDITIONAL_HEAD_ARCH:-shared_lowrank_v1}"
+
+policy_settings_differ_from_baseline() {
+    [[ "${EVENT_THRESHOLD_MODE}" != "quantile" ]] && return 0
+    [[ "${EVENT_THRESHOLD_QUANTILE}" != "0.999" ]] && return 0
+    [[ "${ACTION_TYPE_ALERT_POLICY}" != "default" ]] && return 0
+    [[ "${CONDITIONAL_LOW_SUPPORT_POLICY}" != "conservative_max" ]] && return 0
+    [[ "${CONDITIONAL_LOW_SUPPORT_MARGIN}" != "0.05" ]] && return 0
+    [[ "${CONDITIONAL_ENDPOINT_AWARE_SUPPRESSION}" != "false" ]] && return 0
+    [[ "${CONDITIONAL_ENDPOINT_SUPPRESSION_READ}" != "false" ]] && return 0
+    [[ "${CONDITIONAL_ENDPOINT_SUPPRESSION_MODE}" != "pair_only" ]] && return 0
+    [[ "${CONDITIONAL_BOTH_COLD_UNSEEN_POLICY}" != "alert" ]] && return 0
+    [[ "${SSPM_STATE_MODEL}" != "s4d_complex_node" ]] && return 0
+    [[ "${SSPM_CONDITIONAL_HEAD_ARCH}" != "shared_lowrank_v1" ]] && return 0
+    return 1
+}
 
 is_true() {
     case "${1:-0}" in
@@ -109,6 +136,27 @@ preflight() {
             exit 2
             ;;
     esac
+    if [[ -n "${OUT_TAG_OVERRIDE:-}" && "${STAGE}" != "infer_full" ]]; then
+        echo "error: OUT_TAG_OVERRIDE is only supported with STAGE=infer_full" >&2
+        exit 2
+    fi
+    if [[ -n "${OUT_TAG_OVERRIDE:-}" ]]; then
+        case "${OUT_TAG_OVERRIDE}" in
+            */*|*\\*|*..*)
+                echo "error: OUT_TAG_OVERRIDE must not contain slash, backslash, or '..'" >&2
+                exit 2
+                ;;
+        esac
+    fi
+    if [[ "${STAGE}" == "infer_full" && -z "${OUT_TAG_OVERRIDE:-}" ]]; then
+        if policy_settings_differ_from_baseline; then
+            echo "error: baseline infer_full out_tag protection requires OUT_TAG_OVERRIDE" >&2
+            exit 2
+        fi
+    fi
+    if is_true "${DRY_RUN}"; then
+        return 0
+    fi
     require_file "${EMBEDDER_PATH}" "ClearScope E3 v3 residual Word2Vec embedder"
     if [[ "${STAGE}" == "train_phase3e_base" || "${STAGE}" == "train_phase3g_head" || \
         "${STAGE}" == "infer_full" ]]; then
@@ -258,7 +306,7 @@ run_train_phase3g_head() {
 }
 
 run_infer_full() {
-    local out_tag="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_INFER_FULL"
+    local out_tag="${BASELINE_INFER_OUT_TAG}"
     if [[ -n "${OUT_TAG_OVERRIDE:-}" ]]; then
         out_tag="${OUT_TAG_OVERRIDE}"
     fi
