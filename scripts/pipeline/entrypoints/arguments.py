@@ -64,7 +64,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sspm_train_mode",
-        choices=("train_conditional_and_save", "load_and_infer"),
+        choices=(
+            "build_phase3e_artifacts",
+            "train_phase3e_base",
+            "train_conditional_and_save",
+            "load_and_infer",
+        ),
         default=SlimConfig.sspm_train_mode,
     )
     parser.add_argument(
@@ -737,6 +742,15 @@ def validate_config(config: SlimConfig) -> None:
     validate_word2vec_semantic_mode_matches_config(config)
 
 
+def build_phase3e_artifacts_from_db(config: SlimConfig) -> Path:
+    """Dispatch to the Phase3E artifact builder when that implementation is available."""
+    from scripts.pipeline.io.event_artifacts import (
+        build_phase3e_artifacts_from_db as _build_phase3e_artifacts_from_db,
+    )
+
+    return _build_phase3e_artifacts_from_db(config)
+
+
 def _validate_phase3e_config(config: SlimConfig) -> None:
     """Validate the Phase3E config surface without launching DB precompute."""
     if str(config.sspm_score_head) not in SSPM_SCORE_HEADS:
@@ -970,11 +984,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             result_dir=Path(str(args.phase3g_backfill_result_dir)),
             config=config,
         )
+    elif str(config.sspm_train_mode) == "build_phase3e_artifacts":
+        eval_path = build_phase3e_artifacts_from_db(config)
+    elif (
+        str(config.sspm_target_mode) == "node_action_semantic_mean"
+        and str(config.sspm_train_mode) == "train_phase3e_base"
+    ):
+        eval_path = run_phase3e_train_base_from_precompute(config)
     elif (
         str(config.sspm_target_mode) == "node_action_semantic_mean"
         and str(config.sspm_train_mode) == "train_conditional_and_save"
     ):
-        eval_path = run_phase3e_train_base_from_precompute(config)
+        eval_path = run_phase3g_conditional_train_from_precompute(config)
     elif (
         str(config.sspm_target_mode) == "node_action_semantic_mean"
         and str(config.sspm_train_mode) == "load_and_infer"
@@ -993,6 +1014,7 @@ from scripts.pipeline.io.event_artifacts import (
     _embedder_loaded,
     run_phase3e_train_base_from_precompute,
 )
+from scripts.pipeline.conditional.train import run_phase3g_conditional_train_from_precompute
 from scripts.pipeline.outputs.conditional_reports import _phase3g_backfill_result_reports_from_config
 from scripts.pipeline.outputs.metrics_summary import (
     _compact_print_summary,

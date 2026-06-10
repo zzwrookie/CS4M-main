@@ -148,7 +148,8 @@ preflight() {
                 ;;
         esac
     fi
-    if [[ "${STAGE}" == "infer_full" && -z "${OUT_TAG_OVERRIDE:-}" ]]; then
+    if [[ ( "${STAGE}" == "infer_full" || "${STAGE}" == "all" ) && \
+        -z "${OUT_TAG_OVERRIDE:-}" ]]; then
         if policy_settings_differ_from_baseline; then
             echo "error: baseline infer_full out_tag protection requires OUT_TAG_OVERRIDE" >&2
             exit 2

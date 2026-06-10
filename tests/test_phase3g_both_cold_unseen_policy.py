@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from cs4m.phase3g.conditional_head import BOTH_COLD_ACTION_TARGET, EVENT_SEMANTIC_TARGET
-from scripts.pipeline.conditional.infer import _phase3g_should_suppress_both_cold_unseen_alert
+from scripts.pipeline.conditional.infer import (
+    _phase3g_apply_both_cold_unseen_alert_policy,
+    _phase3g_should_suppress_both_cold_unseen_alert,
+)
 from scripts.pipeline.config.runtime_config import SlimConfig
+from scripts.pipeline.entrypoints import arguments
 from scripts.pipeline.entrypoints.arguments import parse_args, validate_config
 
 
@@ -94,6 +100,79 @@ class Phase3GBothColdUnseenPolicyTests(unittest.TestCase):
                 validation_group_count=0,
             ),
         )
+
+    def test_apply_policy_preserves_raw_count_and_suppresses_final_alert(self) -> None:
+        config = SlimConfig(conditional_both_cold_unseen_policy="observation_only_no_alert")
+        final_alert, suppressed_delta = _phase3g_apply_both_cold_unseen_alert_policy(
+            config=config,
+            raw_alert=True,
+            target_case=BOTH_COLD_ACTION_TARGET,
+            threshold_level="unseen_group_extreme",
+            validation_group_count=0,
+        )
+
+        self.assertFalse(final_alert)
+        self.assertEqual(suppressed_delta, 1)
+        raw_alert_count_before_suppression = 1
+        both_cold_unseen_suppressed_alert_count = suppressed_delta
+        event_alert_count = int(final_alert)
+        self.assertEqual(raw_alert_count_before_suppression, 1)
+        self.assertEqual(both_cold_unseen_suppressed_alert_count, 1)
+        self.assertEqual(event_alert_count, 0)
+
+    def test_sspm_train_mode_choices_include_runner_stages(self) -> None:
+        for mode in (
+            "build_phase3e_artifacts",
+            "train_phase3e_base",
+            "train_conditional_and_save",
+            "load_and_infer",
+        ):
+            args = parse_args(["--sspm_train_mode", mode])
+            self.assertEqual(args.sspm_train_mode, mode)
+
+    def test_main_dispatches_phase3e_and_phase3g_modes(self) -> None:
+        cases = {
+            "build_phase3e_artifacts": "build",
+            "train_phase3e_base": "base",
+            "train_conditional_and_save": "head",
+            "load_and_infer": "infer",
+        }
+        for mode, expected in cases.items():
+            with self.subTest(mode=mode), mock.patch.object(
+                arguments,
+                "build_phase3e_artifacts_from_db",
+                return_value=Path("build.json"),
+            ) as build, mock.patch.object(
+                arguments,
+                "run_phase3e_train_base_from_precompute",
+                return_value=Path("base.json"),
+            ) as base, mock.patch.object(
+                arguments,
+                "run_phase3g_conditional_train_from_precompute",
+                return_value=Path("head.json"),
+            ) as head, mock.patch.object(
+                arguments,
+                "run_phase3e_load_and_infer_from_precompute",
+                return_value=Path("infer.json"),
+            ) as infer:
+                result = arguments.main(
+                    [
+                        "--sspm_train_mode",
+                        mode,
+                        "--event_threshold_mode",
+                        "quantile",
+                        "--pretrained_residual_embedder_path",
+                        "dummy_word2vec.pkl",
+                        "--sspm_checkpoint_path",
+                        "dummy_checkpoint.pkl",
+                    ],
+                )
+
+                self.assertEqual(result, 0)
+                self.assertEqual(build.called, expected == "build")
+                self.assertEqual(base.called, expected == "base")
+                self.assertEqual(head.called, expected == "head")
+                self.assertEqual(infer.called, expected == "infer")
 
 
 if __name__ == "__main__":

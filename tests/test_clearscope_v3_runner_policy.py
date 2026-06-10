@@ -150,6 +150,21 @@ class ClearScopeV3RunnerPolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("OUT_TAG_OVERRIDE must not contain", result.stderr)
 
+    def test_stage_all_policy_override_without_out_tag_override_fails(self) -> None:
+        result = self._run_dry_failure(
+            STAGE="all",
+            EVENT_THRESHOLD_MODE="conditional_target_action_type_group_quantile",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("baseline infer_full out_tag protection", result.stderr)
+
+    def test_stage_all_baseline_dry_run_is_portable(self) -> None:
+        output = self._run_dry(STAGE="all")
+        self.assertIn("===== DRY_RUN build_phase3e_artifacts", output)
+        self.assertIn("===== DRY_RUN train_phase3e_base", output)
+        self.assertIn("===== DRY_RUN train_phase3g_head", output)
+        self.assertIn("===== DRY_RUN infer_full", output)
+
 
 if __name__ == "__main__":
     unittest.main()

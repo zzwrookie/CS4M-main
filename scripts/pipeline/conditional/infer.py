@@ -22,6 +22,27 @@ def _phase3g_should_suppress_both_cold_unseen_alert(
     return int(validation_group_count) <= 0
 
 
+def _phase3g_apply_both_cold_unseen_alert_policy(
+    *,
+    config: SlimConfig,
+    raw_alert: bool,
+    target_case: str,
+    threshold_level: str,
+    validation_group_count: int,
+) -> tuple[bool, int]:
+    """Apply both_cold unseen policy and return final alert plus suppressed delta."""
+    if not bool(raw_alert):
+        return False, 0
+    if _phase3g_should_suppress_both_cold_unseen_alert(
+        config=config,
+        target_case=target_case,
+        threshold_level=threshold_level,
+        validation_group_count=validation_group_count,
+    ):
+        return False, 1
+    return True, 0
+
+
 
 def _score_phase3g_conditional_fast_stream(
     *,
@@ -84,7 +105,9 @@ def _score_phase3g_conditional_fast_stream(
     budget_capped_event_count = 0
     high_priority_event_alert_count = 0
     suppressed_event_alerts_raw: list[dict[str, Any]] = []
+    both_cold_unseen_suppressed_events_raw: list[dict[str, Any]] = []
     suppressed_raw_path = ""
+    both_cold_unseen_suppressed_raw_path = ""
     node_evidence_raw_path = ""
     case_thresholds = {
         EVENT_SEMANTIC_TARGET: _phase3g_conditional_threshold_for_case(
@@ -120,6 +143,7 @@ def _score_phase3g_conditional_fast_stream(
         state_merge_profile_writer = None
         score_trace_writer = None
         node_evidence_writer = None
+        both_cold_unseen_suppressed_writer = None
         if output_dir is not None:
             raw_paths = _raw_output_paths(Path(output_dir))
             raw_paths["events"] = Path(output_dir) / "online_event_alerts.csv"
@@ -127,6 +151,9 @@ def _score_phase3g_conditional_fast_stream(
                 raw_paths["event_score_trace"] = Path(output_dir) / "online_event_score_trace.csv"
             raw_paths["suppressed_endpoint_events"] = (
                 Path(output_dir) / "conditional_endpoint_suppressed_events.raw.csv"
+            )
+            raw_paths["both_cold_unseen_suppressed_events"] = (
+                Path(output_dir) / "conditional_both_cold_unseen_suppressed_events.csv"
             )
             raw_paths["action_type_node_evidence_events"] = (
                 Path(output_dir) / "action_type_node_evidence_events.csv"
@@ -141,6 +168,16 @@ def _score_phase3g_conditional_fast_stream(
                 ),
             )
             node_evidence_raw_path = str(raw_paths["action_type_node_evidence_events"])
+            both_cold_unseen_suppressed_writer = stack.enter_context(
+                StreamingCsvWriter(
+                    raw_paths["both_cold_unseen_suppressed_events"],
+                    EVENT_RAW_FIELDS
+                    + ["both_cold_unseen_policy", "both_cold_unseen_suppressed"],
+                ),
+            )
+            both_cold_unseen_suppressed_raw_path = str(
+                raw_paths["both_cold_unseen_suppressed_events"],
+            )
             if "event_score_trace" in raw_paths:
                 score_trace_writer = stack.enter_context(
                     StreamingCsvWriter(
@@ -484,8 +521,9 @@ def _score_phase3g_conditional_fast_stream(
                     alert_row["threshold_group_key"] = threshold_group_key
                     alert_row["validation_group_count"] = validation_group_count
                     alert_row.update(threshold_trace)
-                    suppress_both_cold_unseen = _phase3g_should_suppress_both_cold_unseen_alert(
+                    alert, both_cold_delta = _phase3g_apply_both_cold_unseen_alert_policy(
                         config=config,
+                        raw_alert=raw_alert,
                         target_case=target_case,
                         threshold_level=threshold_level,
                         validation_group_count=validation_group_count,
@@ -494,11 +532,25 @@ def _score_phase3g_conditional_fast_stream(
                         config.conditional_both_cold_unseen_policy,
                     )
                     alert_row["both_cold_unseen_suppressed"] = bool(
-                        suppress_both_cold_unseen,
+                        both_cold_delta,
                     )
-                    if suppress_both_cold_unseen:
-                        alert = False
-                        both_cold_unseen_suppressed_alert_count += 1
+                    if both_cold_delta:
+                        both_cold_unseen_suppressed_alert_count += int(both_cold_delta)
+                        suppressed_both_cold_row = {
+                            **alert_row,
+                            "both_cold_unseen_policy": str(
+                                config.conditional_both_cold_unseen_policy,
+                            ),
+                            "both_cold_unseen_suppressed": True,
+                        }
+                        if both_cold_unseen_suppressed_writer is not None:
+                            both_cold_unseen_suppressed_writer.write_row(
+                                suppressed_both_cold_row,
+                            )
+                        elif not _online_minimal_enabled(config):
+                            both_cold_unseen_suppressed_events_raw.append(
+                                suppressed_both_cold_row,
+                            )
                     if alert:
                         suppression_started = time.perf_counter()
                         suppression = _conditional_endpoint_suppression_decision(
@@ -796,7 +848,7 @@ def _score_phase3g_conditional_fast_stream(
     test_scoring_seconds = float(time.perf_counter() - scoring_started)
     smaps = _current_smaps_rollup_mb()
     test_summary = score_summary_obj.summary(event_alert_count=event_alert_count)
-    test_summary["test_above_threshold_count"] = int(event_alert_count)
+    test_summary["test_above_threshold_count"] = int(raw_alert_count_before_suppression)
     group_summary_rows = group_summary_obj.rows(cache_meta)
     q_t_group_rows = _phase3g_q_t_group_rows(config, q_t_by_group)
     action_policy_rows = _phase3g_action_policy_group_rows(
@@ -914,6 +966,8 @@ def _score_phase3g_conditional_fast_stream(
             "policy_name": str(config.conditional_both_cold_unseen_policy),
             "suppressed_alert_count": int(both_cold_unseen_suppressed_alert_count),
         },
+        "both_cold_unseen_suppressed_events_raw": both_cold_unseen_suppressed_events_raw,
+        "both_cold_unseen_suppressed_events_csv": both_cold_unseen_suppressed_raw_path,
         "suppressed_event_alerts_raw": suppressed_event_alerts_raw,
         "suppressed_event_alerts_raw_csv": suppressed_raw_path,
         "q_t_by_action_type_csv": q_t_by_action_type_path,
