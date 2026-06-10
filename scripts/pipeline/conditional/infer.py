@@ -43,6 +43,88 @@ def _phase3g_apply_both_cold_unseen_alert_policy(
     return True, 0
 
 
+def _phase3g_conditional_score_summary_payload(
+    *,
+    config: SlimConfig,
+    cache_meta: Mapping[str, Any],
+    stream_outputs: Mapping[str, Any],
+    group_summary_path: str,
+    demoted_group_summary_path: Path,
+    group_threshold_sweep_path: Path,
+    endpoint_suppression_eval: Mapping[str, Any],
+    update_gate_score_space_summary: Mapping[str, Any],
+    group_alert_policy_rows: Sequence[Mapping[str, Any]],
+    required_dual_head_summary_paths: Mapping[str, str],
+) -> dict[str, Any]:
+    """Build the Phase3G conditional score summary JSON payload."""
+    test_summary = dict(stream_outputs.get("test_score_summary", {}))
+    test_by_case = dict(stream_outputs.get("test_score_summary_by_target_case", {}))
+    validation_summary = dict(cache_meta.get("summary", {}))
+    validation_by_case = dict(cache_meta.get("summary_by_target_case", {}))
+    return {
+        "score_head": "conditional_action_semantic",
+        "conditional_head_arch": str(config.sspm_conditional_head_arch),
+        "head_arch": str(config.sspm_conditional_head_arch),
+        "conditional_semantic_loss": str(config.conditional_semantic_loss),
+        "event_threshold_mode": str(config.event_threshold_mode),
+        "event_threshold_quantile": float(config.event_threshold_quantile),
+        "conditional_group_min_count": int(config.conditional_group_min_count),
+        "final_threshold": float(cache_meta.get("threshold", 0.0)),
+        "thresholds_by_target_case": dict(cache_meta.get("thresholds_by_target_case", {})),
+        "group_thresholds_path": str(
+            Path(cache_meta["validation_conditional_scores"]).parent
+            / "validation_conditional_group_thresholds.json"
+        )
+        if cache_meta.get("group_thresholds")
+        else "",
+        "conditional_group_summary_csv": group_summary_path,
+        "validation": validation_summary,
+        "validation_by_target_case": validation_by_case,
+        "test": test_summary,
+        "test_by_target_case": test_by_case,
+        "test_by_target_action_type": stream_outputs.get(
+            "test_score_summary_by_target_action_type",
+            [],
+        ),
+        "test_target_case_counts": dict(stream_outputs.get("target_case_counts", {})),
+        "conditional_endpoint_suppression": dict(
+            stream_outputs.get("conditional_endpoint_suppression", {}),
+        ),
+        "action_type_alert_policy": dict(stream_outputs.get("action_type_alert_policy", {})),
+        "both_cold_unseen_policy": dict(stream_outputs.get("both_cold_unseen_policy", {})),
+        "update_gate_score_space": dict(update_gate_score_space_summary),
+        "conditional_endpoint_suppression_eval": dict(endpoint_suppression_eval),
+        "phase3f_fast_path_enabled": bool(
+            stream_outputs.get("phase3f_fast_path_enabled", False),
+        ),
+        "phase3g_reference_update_path": bool(
+            stream_outputs.get("phase3g_reference_update_path", False),
+        ),
+        "update_gate_enabled": bool(stream_outputs.get("update_gate_enabled", False)),
+        "update_gate_q_t_min": float(stream_outputs.get("update_gate_q_t_min", 1.0)),
+        "update_gate_q_t_mean": float(stream_outputs.get("update_gate_q_t_mean", 1.0)),
+        "update_gate_q_t_max": float(stream_outputs.get("update_gate_q_t_max", 1.0)),
+        "update_gate_q_t_count": int(stream_outputs.get("update_gate_q_t_count", 0)),
+        "update_gate_q_t_std": float(stream_outputs.get("update_gate_q_t_std", 0.0)),
+        "update_gate_applied_count": int(stream_outputs.get("update_gate_applied_count", 0)),
+        "update_gate_skipped_count": int(stream_outputs.get("update_gate_skipped_count", 0)),
+        "q_t_by_action_type_csv": str(stream_outputs.get("q_t_by_action_type_csv", "")),
+        "group_alert_policy_summary_csv": str(
+            stream_outputs.get("group_alert_policy_summary_csv", ""),
+        ),
+        "demoted_group_summary_csv": str(demoted_group_summary_path),
+        "group_threshold_sweep_summary_csv": str(group_threshold_sweep_path),
+        "node_coverage_by_group_csv": str(stream_outputs.get("node_coverage_by_group_csv", "")),
+        "target_case_summary_csv": str(
+            required_dual_head_summary_paths.get("target_case_summary_csv", ""),
+        ),
+        "group_alert_summary_csv": str(
+            required_dual_head_summary_paths.get("group_alert_summary_csv", ""),
+        ),
+        "group_alert_policy_eval_rows": list(group_alert_policy_rows),
+    }
+
+
 
 def _score_phase3g_conditional_fast_stream(
     *,
@@ -1413,79 +1495,24 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
     rss_timeline.append(_phase3g_smaps_timeline_row("after_event_node_coverage_flush"))
     timing["test_scoring_seconds"] = float(stream_outputs.get("test_scoring_seconds", 0.0))
     timing["label_attach_seconds"] = float(time.perf_counter() - group_eval_started)
-    test_summary = dict(stream_outputs.get("test_score_summary", {}))
-    test_by_case = dict(stream_outputs.get("test_score_summary_by_target_case", {}))
-    validation_summary = dict(cache_meta.get("summary", {}))
-    validation_by_case = dict(cache_meta.get("summary_by_target_case", {}))
     group_summary_path = str(stream_outputs.get("conditional_group_summary_csv", ""))
     required_dual_head_summary_paths = _phase3g_write_required_dual_head_summary_csvs(
         output_dir=output_dir,
         stream_outputs=stream_outputs,
         group_summary_csv=group_summary_path,
     )
-    score_summary_payload = {
-        "score_head": "conditional_action_semantic",
-        "conditional_head_arch": str(config.sspm_conditional_head_arch),
-        "head_arch": str(config.sspm_conditional_head_arch),
-        "conditional_semantic_loss": str(config.conditional_semantic_loss),
-        "event_threshold_mode": str(config.event_threshold_mode),
-        "event_threshold_quantile": float(config.event_threshold_quantile),
-        "conditional_group_min_count": int(config.conditional_group_min_count),
-        "final_threshold": float(cache_meta.get("threshold", 0.0)),
-        "thresholds_by_target_case": dict(cache_meta.get("thresholds_by_target_case", {})),
-        "group_thresholds_path": str(
-            Path(cache_meta["validation_conditional_scores"]).parent
-            / "validation_conditional_group_thresholds.json"
-        )
-        if cache_meta.get("group_thresholds")
-        else "",
-        "conditional_group_summary_csv": group_summary_path,
-        "validation": validation_summary,
-        "validation_by_target_case": validation_by_case,
-        "test": test_summary,
-        "test_by_target_case": test_by_case,
-        "test_by_target_action_type": stream_outputs.get(
-            "test_score_summary_by_target_action_type",
-            [],
-        ),
-        "test_target_case_counts": dict(stream_outputs.get("target_case_counts", {})),
-        "conditional_endpoint_suppression": dict(
-            stream_outputs.get("conditional_endpoint_suppression", {}),
-        ),
-        "action_type_alert_policy": dict(
-            stream_outputs.get("action_type_alert_policy", {}),
-        ),
-        "update_gate_score_space": dict(update_gate_score_space_summary),
-        "conditional_endpoint_suppression_eval": dict(endpoint_suppression_eval),
-        "phase3f_fast_path_enabled": bool(
-            stream_outputs.get("phase3f_fast_path_enabled", False),
-        ),
-        "phase3g_reference_update_path": bool(
-            stream_outputs.get("phase3g_reference_update_path", False),
-        ),
-        "update_gate_enabled": bool(stream_outputs.get("update_gate_enabled", False)),
-        "update_gate_q_t_min": float(stream_outputs.get("update_gate_q_t_min", 1.0)),
-        "update_gate_q_t_mean": float(stream_outputs.get("update_gate_q_t_mean", 1.0)),
-        "update_gate_q_t_max": float(stream_outputs.get("update_gate_q_t_max", 1.0)),
-        "update_gate_q_t_count": int(stream_outputs.get("update_gate_q_t_count", 0)),
-        "update_gate_q_t_std": float(stream_outputs.get("update_gate_q_t_std", 0.0)),
-        "update_gate_applied_count": int(stream_outputs.get("update_gate_applied_count", 0)),
-        "update_gate_skipped_count": int(stream_outputs.get("update_gate_skipped_count", 0)),
-        "q_t_by_action_type_csv": str(stream_outputs.get("q_t_by_action_type_csv", "")),
-        "group_alert_policy_summary_csv": str(
-            stream_outputs.get("group_alert_policy_summary_csv", ""),
-        ),
-        "demoted_group_summary_csv": str(demoted_group_summary_path),
-        "group_threshold_sweep_summary_csv": str(group_threshold_sweep_path),
-        "node_coverage_by_group_csv": str(stream_outputs.get("node_coverage_by_group_csv", "")),
-        "target_case_summary_csv": str(
-            required_dual_head_summary_paths.get("target_case_summary_csv", ""),
-        ),
-        "group_alert_summary_csv": str(
-            required_dual_head_summary_paths.get("group_alert_summary_csv", ""),
-        ),
-        "group_alert_policy_eval_rows": group_alert_policy_rows,
-    }
+    score_summary_payload = _phase3g_conditional_score_summary_payload(
+        config=config,
+        cache_meta=cache_meta,
+        stream_outputs=stream_outputs,
+        group_summary_path=group_summary_path,
+        demoted_group_summary_path=demoted_group_summary_path,
+        group_threshold_sweep_path=group_threshold_sweep_path,
+        endpoint_suppression_eval=endpoint_suppression_eval,
+        update_gate_score_space_summary=update_gate_score_space_summary,
+        group_alert_policy_rows=group_alert_policy_rows,
+        required_dual_head_summary_paths=required_dual_head_summary_paths,
+    )
     score_summary_path = output_dir / "score_summary.json"
     score_summary_path.write_text(
         json.dumps(score_summary_payload, indent=2, sort_keys=True, default=str) + "\n",

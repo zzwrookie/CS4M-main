@@ -888,16 +888,25 @@ def resolve_conditional_group_threshold(
     if int(level1_record.get("count", 0)) >= min_count and bool(
         level1_record.get("eligible", False),
     ):
+        level1_threshold = float(level1_record["threshold"])
+        threshold = max(level1_threshold, global_threshold)
+        floor_applied = threshold > level1_threshold
         return {
-            "threshold": float(level1_record["threshold"]),
-            "threshold_level": "level1_group_quantile",
+            "threshold": float(threshold),
+            "threshold_level": (
+                "level1_group_quantile_global_floor"
+                if floor_applied
+                else "level1_group_quantile"
+            ),
             "threshold_group_key": str(level1_key),
             "validation_group_count": int(level1_record.get("count", 0)),
             "low_support_policy": str(low_support_policy),
             "group_validation_max": float(level1_record.get("validation_max", 0.0)),
-            "parent_threshold": float(level1_record["threshold"]),
+            "parent_threshold": float(level1_threshold),
             "global_threshold": float(global_threshold),
-            "final_threshold_source": "level1_group_quantile",
+            "final_threshold_source": (
+                "global_floor" if floor_applied else "level1_group_quantile"
+            ),
             "adaptive_margin_used": 0.0,
             "validation_count_bucket": "sufficient",
         }

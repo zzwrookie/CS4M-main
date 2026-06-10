@@ -9,6 +9,7 @@ from unittest import mock
 from cs4m.phase3g.conditional_head import BOTH_COLD_ACTION_TARGET, EVENT_SEMANTIC_TARGET
 from scripts.pipeline.conditional.infer import (
     _phase3g_apply_both_cold_unseen_alert_policy,
+    _phase3g_conditional_score_summary_payload,
     _phase3g_should_suppress_both_cold_unseen_alert,
 )
 from scripts.pipeline.config.runtime_config import SlimConfig
@@ -119,6 +120,38 @@ class Phase3GBothColdUnseenPolicyTests(unittest.TestCase):
         self.assertEqual(raw_alert_count_before_suppression, 1)
         self.assertEqual(both_cold_unseen_suppressed_alert_count, 1)
         self.assertEqual(event_alert_count, 0)
+
+    def test_score_summary_payload_includes_both_cold_unseen_policy(self) -> None:
+        config = SlimConfig(
+            conditional_both_cold_unseen_policy="observation_only_no_alert",
+            event_threshold_mode="conditional_target_action_type_group_quantile",
+            event_threshold_quantile=0.999,
+        )
+        payload = _phase3g_conditional_score_summary_payload(
+            config=config,
+            cache_meta={"threshold": 0.04},
+            stream_outputs={
+                "both_cold_unseen_policy": {
+                    "policy_name": "observation_only_no_alert",
+                    "suppressed_alert_count": 17,
+                },
+                "test_score_summary": {},
+                "test_score_summary_by_target_case": {},
+            },
+            group_summary_path="conditional_score_summary_by_target_action_type.csv",
+            demoted_group_summary_path=Path("demoted.csv"),
+            group_threshold_sweep_path=Path("sweep.csv"),
+            endpoint_suppression_eval={},
+            update_gate_score_space_summary={},
+            group_alert_policy_rows=[],
+            required_dual_head_summary_paths={},
+        )
+
+        self.assertEqual(
+            payload["both_cold_unseen_policy"]["policy_name"],
+            "observation_only_no_alert",
+        )
+        self.assertEqual(payload["both_cold_unseen_policy"]["suppressed_alert_count"], 17)
 
     def test_sspm_train_mode_choices_include_runner_stages(self) -> None:
         for mode in (
