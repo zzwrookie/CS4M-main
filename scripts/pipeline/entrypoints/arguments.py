@@ -1014,8 +1014,12 @@ from scripts.pipeline.io.event_artifacts import (
     _embedder_loaded,
     run_phase3e_train_base_from_precompute,
 )
-from scripts.pipeline.conditional.train import run_phase3g_conditional_train_from_precompute
-from scripts.pipeline.outputs.conditional_reports import _phase3g_backfill_result_reports_from_config
+from scripts.pipeline.conditional.train import (
+    run_phase3g_conditional_train_from_precompute,
+)
+from scripts.pipeline.outputs.conditional_reports import (
+    _phase3g_backfill_result_reports_from_config,
+)
 from scripts.pipeline.outputs.metrics_summary import (
     _compact_print_summary,
     _validate_active_event_score_mode,
