@@ -1495,6 +1495,8 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
     rss_timeline.append(_phase3g_smaps_timeline_row("after_event_node_coverage_flush"))
     timing["test_scoring_seconds"] = float(stream_outputs.get("test_scoring_seconds", 0.0))
     timing["label_attach_seconds"] = float(time.perf_counter() - group_eval_started)
+    validation_summary = dict(cache_meta.get("summary", {}))
+    validation_by_case = dict(cache_meta.get("summary_by_target_case", {}))
     group_summary_path = str(stream_outputs.get("conditional_group_summary_csv", ""))
     required_dual_head_summary_paths = _phase3g_write_required_dual_head_summary_csvs(
         output_dir=output_dir,
