@@ -36,6 +36,11 @@ FALLBACK_TOKENS = {
     "socket_other",
     "netflow",
 }
+DEFAULT_GROUND_TRUTH_PATHS = [
+    "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_appstarter_0515.csv",
+    "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv",
+    "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_tester_0517.csv",
+]
 
 
 @dataclass(frozen=True)
@@ -249,12 +254,20 @@ def build_event_tuple_summary(
         for tuple_key, count in test_tuples.items()
         if tuple_key in train_tuples
     }
+    skipped_rate = skipped_event_count / input_event_count if input_event_count else 0.0
+    usable_event_rate = event_count / input_event_count if input_event_count else 0.0
+    report_warnings = []
+    if skipped_rate > 0.20:
+        report_warnings.append("high_skipped_event_rate")
     return {
         "input_event_count": input_event_count,
         "event_count": event_count,
         "skipped_event_count": skipped_event_count,
         "skipped_missing_src_count": skipped_missing_src_count,
         "skipped_missing_dst_count": skipped_missing_dst_count,
+        "skipped_rate": skipped_rate,
+        "usable_event_rate": usable_event_rate,
+        "report_warnings": report_warnings,
         "split_counts": dict(sorted(split_counts.items())),
         "operation_counts": dict(sorted(operation_counts.items())),
         "train_tuple_count": len(train_tuples),
@@ -378,8 +391,16 @@ def parse_ground_truth_indices(paths: list[str]) -> set[int]:
     return indices
 
 
+def _subject_node_table() -> str:
+    table = os.getenv("CLAD_SUBJECT_NODE_TABLE", "subject_node_table").strip()
+    if not table.replace("_", "").isalnum():
+        raise ValueError(f"invalid CLAD_SUBJECT_NODE_TABLE: {table}")
+    return table
+
+
 def load_nodes(conn, semantic_mode: str, max_nodes_per_type: int) -> list[AuditNode]:
     """Load and tokenize bounded ClearScope E5 nodes from PostgreSQL."""
+    subject_node_table = _subject_node_table()
     queries = [
         (
             "file",
@@ -392,9 +413,9 @@ def load_nodes(conn, semantic_mode: str, max_nodes_per_type: int) -> list[AuditN
         ),
         (
             "subject",
-            """
+            f"""
             select index_id, node_uuid, path, cmd
-            from subject_node_table
+            from {subject_node_table}
             order by index_id
             limit %s
             """,
@@ -418,6 +439,71 @@ def load_nodes(conn, semantic_mode: str, max_nodes_per_type: int) -> list[AuditN
                 row = dict(zip(columns, values))
                 row["node_type"] = node_type
                 nodes.append(tokenize_node_row(row, semantic_mode=semantic_mode))
+    return nodes
+
+
+def _load_typed_nodes_by_index_ids(
+    conn,
+    semantic_mode: str,
+    index_ids: tuple[int, ...],
+    node_type: str,
+    sql: str,
+) -> list[AuditNode]:
+    nodes: list[AuditNode] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, (index_ids,))
+        columns = [desc[0] for desc in cur.description]
+        for values in cur.fetchall():
+            row = dict(zip(columns, values))
+            row["node_type"] = node_type
+            nodes.append(tokenize_node_row(row, semantic_mode=semantic_mode))
+    return nodes
+
+
+def load_nodes_by_index_ids(
+    conn,
+    semantic_mode: str,
+    index_ids: Iterable[int],
+) -> list[AuditNode]:
+    """Load and tokenize ClearScope E5 nodes referenced by sampled events."""
+    ids = tuple(sorted({int(index_id) for index_id in index_ids}))
+    if not ids:
+        return []
+    subject_node_table = _subject_node_table()
+    queries = [
+        (
+            "file",
+            """
+            select index_id, node_uuid, path
+            from file_node_table
+            where index_id in %s
+            order by index_id
+            """,
+        ),
+        (
+            "subject",
+            f"""
+            select index_id, node_uuid, path, cmd
+            from {subject_node_table}
+            where index_id in %s
+            order by index_id
+            """,
+        ),
+        (
+            "netflow",
+            """
+            select index_id, node_uuid, src_addr, src_port, dst_addr, dst_port
+            from netflow_node_table
+            where index_id in %s
+            order by index_id
+            """,
+        ),
+    ]
+    nodes: list[AuditNode] = []
+    for node_type, sql in queries:
+        nodes.extend(
+            _load_typed_nodes_by_index_ids(conn, semantic_mode, ids, node_type, sql)
+        )
     return nodes
 
 
@@ -473,13 +559,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--ground_truth",
         action="append",
-        default=[
-            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_appstarter_0515.csv",
-            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv",
-            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_tester_0517.csv",
-        ],
+        default=None,
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.ground_truth is None:
+        args.ground_truth = list(DEFAULT_GROUND_TRUTH_PATHS)
+    return args
 
 
 def run_audit(args: argparse.Namespace) -> dict[str, str]:
@@ -487,8 +572,24 @@ def run_audit(args: argparse.Namespace) -> dict[str, str]:
     with connect_db(args.database) as conn:
         nodes = load_nodes(conn, args.semantic_mode, args.max_nodes_per_type)
         events = load_events(conn, args.max_events_per_split)
-    nodes_by_index = {node.index_id: node for node in nodes}
+        endpoint_index_ids = {
+            int(event[index_key])
+            for event in events
+            for index_key in ("src_index_id", "dst_index_id")
+        }
+        endpoint_nodes = load_nodes_by_index_ids(
+            conn,
+            args.semantic_mode,
+            endpoint_index_ids,
+        )
+    nodes_by_index = {node.index_id: node for node in endpoint_nodes}
+    nodes_by_index.update({node.index_id: node for node in nodes})
     label_free_summary = build_label_free_summary(nodes)
+    sampled_node_ids = {node.index_id for node in nodes}
+    label_free_summary["endpoint_node_count"] = len(
+        {node.index_id for node in endpoint_nodes if node.index_id not in sampled_node_ids}
+    )
+    label_free_summary["tuple_summary_node_count"] = len(nodes_by_index)
     label_free_summary["event_tuple_summary"] = build_event_tuple_summary(
         events,
         nodes_by_index,

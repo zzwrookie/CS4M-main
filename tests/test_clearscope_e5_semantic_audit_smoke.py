@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import textwrap
 import unittest
+from unittest.mock import patch
 
 from scripts.tools.audit_clearscope_e5_semantic_smoke import (
     FALLBACK_TOKENS,
@@ -17,6 +19,41 @@ from scripts.tools.audit_clearscope_e5_semantic_smoke import (
     collect_fallback_counts,
     extract_detail_token,
 )
+
+
+class FakeCursor:
+    """Small DB cursor fake for audit loader tests."""
+
+    def __init__(self, responses: list[tuple[list[str], list[tuple[object, ...]]]]):
+        self.responses = responses
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
+        self.description: list[tuple[str]] = []
+        self.rows: list[tuple[object, ...]] = []
+
+    def __enter__(self) -> "FakeCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...]) -> None:
+        self.queries.append((sql, params))
+        columns, rows = self.responses.pop(0)
+        self.description = [(column,) for column in columns]
+        self.rows = rows
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self.rows
+
+
+class FakeConnection:
+    """Small DB connection fake that returns one reusable cursor."""
+
+    def __init__(self, responses: list[tuple[list[str], list[tuple[object, ...]]]]):
+        self.cursor_obj = FakeCursor(responses)
+
+    def cursor(self) -> FakeCursor:
+        return self.cursor_obj
 
 
 class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
@@ -420,6 +457,192 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
             )
 
             self.assertEqual(parse_ground_truth_indices([str(path)]), {123, 456})
+
+    def test_parse_args_custom_ground_truth_replaces_defaults(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import parse_args
+
+        default_args = parse_args([])
+        custom_args = parse_args(["--ground_truth", "custom.csv"])
+
+        self.assertEqual(
+            default_args.ground_truth,
+            [
+                "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_appstarter_0515.csv",
+                "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv",
+                "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_tester_0517.csv",
+            ],
+        )
+        self.assertEqual(custom_args.ground_truth, ["custom.csv"])
+
+    def test_load_nodes_uses_configured_subject_table(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import load_nodes
+
+        conn = FakeConnection(
+            [
+                (
+                    ["index_id", "node_uuid", "path"],
+                    [(1, "file-1", "/system/bin/sh")],
+                ),
+                (
+                    ["index_id", "node_uuid", "path", "cmd"],
+                    [(2, "subject-1", "/system/bin/app_process", "com.example")],
+                ),
+                (
+                    [
+                        "index_id",
+                        "node_uuid",
+                        "src_addr",
+                        "src_port",
+                        "dst_addr",
+                        "dst_port",
+                    ],
+                    [(3, "netflow-1", "10.0.0.1", "1", "10.0.0.2", "2")],
+                ),
+            ]
+        )
+
+        with patch.dict(os.environ, {"CLAD_SUBJECT_NODE_TABLE": "custom_subjects"}):
+            nodes = load_nodes(conn, "raw_detail_v31_discriminative", 10)
+
+        self.assertEqual([node.index_id for node in nodes], [1, 2, 3])
+        subject_sql = conn.cursor_obj.queries[1][0]
+        self.assertIn("from custom_subjects", subject_sql)
+
+    def test_load_nodes_by_index_ids_queries_endpoint_nodes(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import (
+            load_nodes_by_index_ids,
+        )
+
+        conn = FakeConnection(
+            [
+                (
+                    ["index_id", "node_uuid", "path"],
+                    [(10, "file-10", "/data/local/tmp/a")],
+                ),
+                (
+                    ["index_id", "node_uuid", "path", "cmd"],
+                    [(20, "subject-20", "/system/bin/app_process", "com.example")],
+                ),
+                (
+                    [
+                        "index_id",
+                        "node_uuid",
+                        "src_addr",
+                        "src_port",
+                        "dst_addr",
+                        "dst_port",
+                    ],
+                    [(30, "netflow-30", "10.0.0.1", "1", "10.0.0.2", "2")],
+                ),
+            ]
+        )
+
+        with patch.dict(os.environ, {"CLAD_SUBJECT_NODE_TABLE": "custom_subjects"}):
+            nodes = load_nodes_by_index_ids(
+                conn,
+                "raw_detail_v31_discriminative",
+                {10, 20, 30, 999},
+            )
+
+        self.assertEqual(sorted(node.index_id for node in nodes), [10, 20, 30])
+        for _sql, params in conn.cursor_obj.queries:
+            self.assertEqual(params, ((10, 20, 30, 999),))
+        self.assertIn("from custom_subjects", conn.cursor_obj.queries[1][0])
+
+    def test_event_tuple_summary_reports_usable_rate_and_warning(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import (
+            build_event_tuple_summary,
+        )
+
+        nodes = {
+            1: AuditNode(1, "p", "subject", "proc", ("process", "native", "proc")),
+            2: AuditNode(2, "f", "file", "/tmp/a", ("file", "android_tmp", "a")),
+        }
+        events = [
+            {
+                "split": "train",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 2,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_READ",
+                "src_index_id": 999,
+                "dst_index_id": 2,
+            },
+        ]
+
+        summary = build_event_tuple_summary(events, nodes)
+
+        self.assertEqual(summary["skipped_rate"], 0.5)
+        self.assertEqual(summary["usable_event_rate"], 0.5)
+        self.assertIn("high_skipped_event_rate", summary["report_warnings"])
+
+    def test_run_audit_supplements_event_endpoint_nodes(self) -> None:
+        import argparse
+
+        from scripts.tools import audit_clearscope_e5_semantic_smoke as audit
+
+        sampled_nodes = [
+            AuditNode(1, "sample", "subject", "sample", ("process", "native", "sample")),
+        ]
+        endpoint_nodes = [
+            AuditNode(2, "dst", "file", "/tmp/a", ("file", "android_tmp", "a")),
+        ]
+        events = [
+            {
+                "split": "train",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 2,
+            }
+        ]
+        captured: dict[str, object] = {}
+
+        class DummyConnection:
+            def __enter__(self) -> "DummyConnection":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        def fake_write_reports(**kwargs: object) -> dict[str, str]:
+            captured.update(kwargs)
+            return {"label_free_json": "out.json"}
+
+        args = argparse.Namespace(
+            database="clearscope_e5",
+            semantic_mode="raw_detail_v31_discriminative",
+            max_nodes_per_type=10,
+            max_events_per_split=10,
+            ground_truth=[],
+            output_dir="tmp/out",
+        )
+
+        with patch.object(audit, "connect_db", return_value=DummyConnection()):
+            with patch.object(audit, "load_nodes", return_value=sampled_nodes):
+                with patch.object(audit, "load_events", return_value=events):
+                    with patch.object(
+                        audit,
+                        "load_nodes_by_index_ids",
+                        return_value=endpoint_nodes,
+                    ) as load_endpoints:
+                        with patch.object(
+                            audit,
+                            "parse_ground_truth_indices",
+                            return_value=set(),
+                        ):
+                            with patch.object(audit, "write_reports", fake_write_reports):
+                                paths = audit.run_audit(args)
+
+        load_endpoints.assert_called_once()
+        self.assertEqual(paths, {"label_free_json": "out.json"})
+        summary = captured["label_free_summary"]
+        self.assertEqual(summary["node_count"], 1)
+        self.assertEqual(summary["endpoint_node_count"], 1)
+        self.assertEqual(summary["event_tuple_summary"]["skipped_event_count"], 0)
+        self.assertEqual(summary["event_tuple_summary"]["usable_event_rate"], 1.0)
 
 
 if __name__ == "__main__":
