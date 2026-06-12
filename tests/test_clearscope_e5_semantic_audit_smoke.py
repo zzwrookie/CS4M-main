@@ -406,6 +406,21 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
                 ["/data/local/tmp/a", "/data/local/tmp/b"],
             )
 
+    def test_parse_ground_truth_indices_reads_last_csv_column(self) -> None:
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import parse_ground_truth_indices
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "gt.csv"
+            path.write_text(
+                "NODE,{'file': '/data/local/tmp'},123\n"
+                "NODE,{'subject': 'None /system/bin/toybox'},456\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(parse_ground_truth_indices([str(path)]), {123, 456})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,10 +5,15 @@ import argparse
 import csv
 import json
 import os
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_V31_SEMANTIC_MODE,
@@ -350,3 +355,162 @@ def write_reports(
     _write_csv(Path(paths["fallback_csv"]), fallback_rows)
     _write_csv(Path(paths["collision_csv"]), collision_rows)
     return paths
+
+
+def parse_ground_truth_indices(paths: list[str]) -> set[int]:
+    """Read E5 ground-truth node index IDs from CSV files."""
+    indices: set[int] = set()
+    for path_text in paths:
+        path = Path(path_text)
+        if not path.exists():
+            raise FileNotFoundError(f"ground-truth file is missing: {path}")
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            for row in reader:
+                if not row:
+                    continue
+                try:
+                    indices.add(int(row[-1]))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"invalid ground-truth index in {path}: {row}"
+                    ) from exc
+    return indices
+
+
+def load_nodes(conn, semantic_mode: str, max_nodes_per_type: int) -> list[AuditNode]:
+    """Load and tokenize bounded ClearScope E5 nodes from PostgreSQL."""
+    queries = [
+        (
+            "file",
+            """
+            select index_id, node_uuid, path
+            from file_node_table
+            order by index_id
+            limit %s
+            """,
+        ),
+        (
+            "subject",
+            """
+            select index_id, node_uuid, path, cmd
+            from subject_node_table
+            order by index_id
+            limit %s
+            """,
+        ),
+        (
+            "netflow",
+            """
+            select index_id, node_uuid, src_addr, src_port, dst_addr, dst_port
+            from netflow_node_table
+            order by index_id
+            limit %s
+            """,
+        ),
+    ]
+    nodes: list[AuditNode] = []
+    with conn.cursor() as cur:
+        for node_type, sql in queries:
+            cur.execute(sql, (int(max_nodes_per_type),))
+            columns = [desc[0] for desc in cur.description]
+            for values in cur.fetchall():
+                row = dict(zip(columns, values))
+                row["node_type"] = node_type
+                nodes.append(tokenize_node_row(row, semantic_mode=semantic_mode))
+    return nodes
+
+
+def load_events(conn, max_events_per_split: int) -> list[dict[str, object]]:
+    """Load bounded E5 event rows by configured split days."""
+    from scripts.pipeline.io.db_stream import _day_bounds
+
+    year_month = "2019-05"
+    split_days = {
+        "train": [8, 9],
+        "val": [11],
+        "test": [14, 15, 17],
+    }
+    events: list[dict[str, object]] = []
+    with conn.cursor() as cur:
+        for split, days in split_days.items():
+            remaining = int(max_events_per_split)
+            for day in days:
+                if remaining <= 0:
+                    break
+                start_ns, end_ns = _day_bounds(year_month, day)
+                cur.execute(
+                    """
+                    select operation, src_index_id, dst_index_id, timestamp_rec, _id
+                    from event_table
+                    where timestamp_rec >= %s and timestamp_rec < %s
+                    order by timestamp_rec, _id
+                    limit %s
+                    """,
+                    (start_ns, end_ns, remaining),
+                )
+                columns = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                for values in rows:
+                    row = dict(zip(columns, values))
+                    row["split"] = split
+                    events.append(row)
+                remaining -= len(rows)
+    return events
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments for the E5 semantic audit smoke."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database", default="clearscope_e5")
+    parser.add_argument("--semantic_mode", default="raw_detail_v31_discriminative")
+    parser.add_argument("--max_nodes_per_type", type=int, default=50000)
+    parser.add_argument("--max_events_per_split", type=int, default=100000)
+    parser.add_argument(
+        "--output_dir",
+        default="tmp/clearscope_e5_semantic_audit_smoke",
+    )
+    parser.add_argument(
+        "--ground_truth",
+        action="append",
+        default=[
+            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_appstarter_0515.csv",
+            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv",
+            "ground_truth/E5-CLEARSCOPE/node_clearscope_e5_tester_0517.csv",
+        ],
+    )
+    return parser.parse_args(argv)
+
+
+def run_audit(args: argparse.Namespace) -> dict[str, str]:
+    """Run the bounded ClearScope E5 semantic audit smoke."""
+    with connect_db(args.database) as conn:
+        nodes = load_nodes(conn, args.semantic_mode, args.max_nodes_per_type)
+        events = load_events(conn, args.max_events_per_split)
+    nodes_by_index = {node.index_id: node for node in nodes}
+    label_free_summary = build_label_free_summary(nodes)
+    label_free_summary["event_tuple_summary"] = build_event_tuple_summary(
+        events,
+        nodes_by_index,
+    )
+    malicious_index_ids = parse_ground_truth_indices(list(args.ground_truth))
+    label_aware_diagnostics = build_label_aware_diagnostics(nodes, malicious_index_ids)
+    return write_reports(
+        output_dir=args.output_dir,
+        label_free_summary=label_free_summary,
+        label_aware_diagnostics=label_aware_diagnostics,
+        fallback_rows=fallback_rows_from_summary(label_free_summary),
+        collision_rows=build_collision_rows(nodes),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint."""
+    args = parse_args(argv)
+    paths = run_audit(args)
+    print(json.dumps(paths, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
