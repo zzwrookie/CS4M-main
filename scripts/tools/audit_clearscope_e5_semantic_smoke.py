@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import psycopg2
-
 from cs4m.semantics.clearscope_android import (
+    CLEARSCOPE_V31_SEMANTIC_MODE,
     android_process_natural_tokens_refined,
     clearscope_file_natural_tokens_v31,
     clearscope_netflow_natural_tokens_refined,
+    normalize_clearscope_semantic_mode,
 )
 
 
@@ -71,7 +71,8 @@ def _row_text(row: dict[str, Any], *keys: str) -> str:
 def tokenize_node_row(row: dict[str, Any], semantic_mode: str) -> AuditNode:
     """Tokenize one ClearScope E5 node row with the requested semantic mode."""
     node_type = str(row.get("node_type", "")).strip().lower()
-    if semantic_mode != "raw_detail_v31_discriminative":
+    normalized_mode = normalize_clearscope_semantic_mode(semantic_mode)
+    if normalized_mode != CLEARSCOPE_V31_SEMANTIC_MODE:
         raise ValueError(f"unsupported E5 audit semantic mode: {semantic_mode}")
     if node_type == "file":
         raw_detail = _row_text(row, "path")
@@ -99,6 +100,13 @@ def tokenize_node_row(row: dict[str, Any], semantic_mode: str) -> AuditNode:
 
 def connect_db(database: str):
     """Connect to local PostgreSQL using CLAD_DB_* environment variables."""
+    try:
+        import psycopg2
+    except ModuleNotFoundError as error:
+        raise ModuleNotFoundError(
+            "psycopg2 is required for connect_db; install psycopg2 or psycopg2-binary"
+        ) from error
+
     return psycopg2.connect(
         host=os.getenv("CLAD_DB_HOST", "localhost"),
         port=int(os.getenv("CLAD_DB_PORT", "5433")),

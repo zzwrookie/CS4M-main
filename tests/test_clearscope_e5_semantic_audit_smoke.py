@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 import unittest
 
 from scripts.tools.audit_clearscope_e5_semantic_smoke import (
@@ -137,6 +140,22 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
         self.assertEqual(node.semantic_tokens[0], "file")
         self.assertIn("android_tmp_file", node.semantic_tokens)
 
+    def test_tokenize_file_row_accepts_v31_semantic_alias(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 13,
+                "node_uuid": "file-node-alias",
+                "node_type": "file",
+                "path": "/data/local/tmp/tester",
+            },
+            semantic_mode="clearscope_raw_detail_v31_discriminative",
+        )
+
+        self.assertEqual(node.node_type, "file")
+        self.assertIn("android_tmp_file", node.semantic_tokens)
+
     def test_tokenize_subject_row_uses_cmd_when_present(self) -> None:
         from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
 
@@ -173,6 +192,42 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
 
         self.assertEqual(node.node_type, "netflow")
         self.assertIn("netflow", node.semantic_tokens)
+
+    def test_module_import_without_psycopg2_and_connect_db_error_is_clear(self) -> None:
+        code = textwrap.dedent(
+            """
+            import builtins
+
+            real_import = builtins.__import__
+
+            def blocked_import(name, *args, **kwargs):
+                if name == "psycopg2":
+                    raise ModuleNotFoundError("No module named 'psycopg2'")
+                return real_import(name, *args, **kwargs)
+
+            builtins.__import__ = blocked_import
+
+            from scripts.tools.audit_clearscope_e5_semantic_smoke import connect_db
+
+            try:
+                connect_db("clearscope_e5")
+            except ModuleNotFoundError as error:
+                if "psycopg2 is required for connect_db" not in str(error):
+                    raise
+            else:
+                raise AssertionError("connect_db unexpectedly succeeded")
+            """
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            check=False,
+            cwd=".",
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
