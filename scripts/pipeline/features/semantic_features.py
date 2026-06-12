@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cs4m.semantics.clearscope_android import (
+    CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE,
+    clearscope_residual_text_v33_e5_android_safe,
+)
 from scripts.pipeline.config.runtime_config import *
 
 
@@ -407,15 +411,25 @@ def residual_text(
     process_semantic_config: ProcessSemanticConfig | None = None,
     max_tokens_per_node: int = 8,
     theia_netflow_policy: str = "scope_port",
-    semantic_mode: str = CLEARSCOPE_REFINED_SEMANTIC_MODE,
+    semantic_mode: str = CLEARSCOPE_V3_SEMANTIC_MODE,
 ) -> str:
     """Return residual text, using exact IP only for netflow rows."""
     if is_clearscope_dataset(dataset):
-        if (
-            normalize_clearscope_semantic_mode(semantic_mode)
-            == CLEARSCOPE_LEGACY_SEMANTIC_MODE
-        ):
+        clearscope_mode = normalize_clearscope_semantic_mode(semantic_mode)
+        if clearscope_mode == CLEARSCOPE_LEGACY_SEMANTIC_MODE:
             return _clearscope_natural_residual_text(row)
+        if clearscope_mode == CLEARSCOPE_REFINED_SEMANTIC_MODE:
+            return clearscope_residual_text_refined(dict(row))
+        if clearscope_mode == CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE:
+            return clearscope_residual_text_v32_cache_only(dict(row))
+        if clearscope_mode == CLEARSCOPE_V32_SEMANTIC_MODE:
+            return clearscope_residual_text_v32(dict(row))
+        if clearscope_mode == CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE:
+            return clearscope_residual_text_v33_e5_android_safe(dict(row))
+        if clearscope_mode == CLEARSCOPE_V31_SEMANTIC_MODE:
+            return clearscope_residual_text_v31(dict(row))
+        if clearscope_mode == CLEARSCOPE_V3_SEMANTIC_MODE:
+            return clearscope_residual_text_v3(dict(row))
         return clearscope_residual_text_refined(dict(row))
     if is_theia_dataset(dataset):
         return _theia_natural_residual_text(row, theia_netflow_policy)

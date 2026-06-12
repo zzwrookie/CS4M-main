@@ -17,8 +17,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_V31_SEMANTIC_MODE,
+    CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE,
     android_process_natural_tokens_refined,
     clearscope_file_natural_tokens_v31,
+    clearscope_file_natural_tokens_v33_e5_android_safe,
     clearscope_netflow_natural_tokens_refined,
     normalize_clearscope_semantic_mode,
 )
@@ -82,11 +84,17 @@ def tokenize_node_row(row: dict[str, Any], semantic_mode: str) -> AuditNode:
     """Tokenize one ClearScope E5 node row with the requested semantic mode."""
     node_type = str(row.get("node_type", "")).strip().lower()
     normalized_mode = normalize_clearscope_semantic_mode(semantic_mode)
-    if normalized_mode != CLEARSCOPE_V31_SEMANTIC_MODE:
+    if normalized_mode not in {
+        CLEARSCOPE_V31_SEMANTIC_MODE,
+        CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE,
+    }:
         raise ValueError(f"unsupported E5 audit semantic mode: {semantic_mode}")
     if node_type == "file":
         raw_detail = _row_text(row, "path")
-        tokens = clearscope_file_natural_tokens_v31(raw_detail)
+        if normalized_mode == CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE:
+            tokens = clearscope_file_natural_tokens_v33_e5_android_safe(raw_detail)
+        else:
+            tokens = clearscope_file_natural_tokens_v31(raw_detail)
     elif node_type == "subject":
         raw_detail = _row_text(row, "cmd", "path")
         tokens = android_process_natural_tokens_refined(raw_detail)

@@ -180,6 +180,39 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
         self.assertEqual(node.semantic_tokens[0], "file")
         self.assertIn("android_tmp_file", node.semantic_tokens)
 
+    def test_tokenize_file_row_v31_keeps_sdcardfs_appid_coarse(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 14,
+                "node_uuid": "file-node-v31",
+                "node_type": "file",
+                "path": "/config/sdcardfs/de.belu.appstarter/appid",
+            },
+            semantic_mode="raw_detail_v31_discriminative",
+        )
+
+        self.assertEqual(node.semantic_tokens, ("file", "file_other", "other"))
+
+    def test_tokenize_file_row_v33_uses_sdcardfs_appid_detail(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 15,
+                "node_uuid": "file-node-v33",
+                "node_type": "file",
+                "path": "/config/sdcardfs/de.belu.appstarter/appid",
+            },
+            semantic_mode="raw_detail_v33_e5_android_safe",
+        )
+
+        self.assertEqual(
+            node.semantic_tokens,
+            ("file", "android_sdcardfs_appid", "de_belu_appstarter_appid"),
+        )
+
     def test_tokenize_file_row_accepts_v31_semantic_alias(self) -> None:
         from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
 
@@ -232,6 +265,25 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
 
         self.assertEqual(node.node_type, "netflow")
         self.assertIn("netflow", node.semantic_tokens)
+
+    def test_tokenize_netflow_row_keeps_fixed_clear_scope_netflow_under_v33(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 16,
+                "node_uuid": "netflow-node-v33",
+                "node_type": "netflow",
+                "src_addr": "10.0.0.1",
+                "src_port": "123",
+                "dst_addr": "10.0.0.2",
+                "dst_port": "443",
+            },
+            semantic_mode="raw_detail_v33_e5_android_safe",
+        )
+
+        self.assertEqual(node.node_type, "netflow")
+        self.assertEqual(node.semantic_tokens, ("netflow",))
 
     def test_module_import_without_psycopg2_and_connect_db_error_is_clear(self) -> None:
         code = textwrap.dedent(

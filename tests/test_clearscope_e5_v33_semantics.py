@@ -9,8 +9,10 @@ from cs4m.semantics.clearscope_android import (
     android_file_detail_v33_e5_android_safe,
     clearscope_file_natural_tokens_v31,
     clearscope_file_natural_tokens_v33_e5_android_safe,
+    clearscope_residual_text_v33_e5_android_safe,
     normalize_clearscope_semantic_mode,
 )
+from scripts.pipeline.features.semantic_features import residual_text
 
 
 class ClearScopeE5V33SemanticsTests(unittest.TestCase):
@@ -106,6 +108,54 @@ class ClearScopeE5V33SemanticsTests(unittest.TestCase):
             clearscope_file_natural_tokens_v33_e5_android_safe(path),
             clearscope_file_natural_tokens_v31(path),
         )
+
+    def test_v33_residual_text_uses_sdcardfs_appid_detail(self) -> None:
+        row = {
+            "action": "EVENT_READ",
+            "src_kind": "process",
+            "src_process_cmd": "com.android.providers.contacts",
+            "dst_kind": "file",
+            "dst_file_path": "/config/sdcardfs/com.android.providers.contacts/appid",
+        }
+
+        text = clearscope_residual_text_v33_e5_android_safe(row)
+
+        self.assertIn("android_sdcardfs_appid", text.split())
+        self.assertIn("com_android_providers_contacts_appid", text.split())
+
+    def test_pipeline_residual_text_routes_v33_mode(self) -> None:
+        row = {
+            "action": "EVENT_READ",
+            "src_kind": "process",
+            "src_process_cmd": "com.android.providers.contacts",
+            "dst_kind": "file",
+            "dst_file_path": "/config/sdcardfs/de.belu.appstarter/appid",
+        }
+
+        text = residual_text(
+            row,
+            dataset="CLEARSCOPE_E5",
+            semantic_mode="raw_detail_v33_e5_android_safe",
+        )
+
+        self.assertIn("android_sdcardfs_appid", text.split())
+        self.assertIn("de_belu_appstarter_appid", text.split())
+
+    def test_v33_residual_text_keeps_netflow_fixed_coarse(self) -> None:
+        row = {
+            "action": "EVENT_CONNECT",
+            "src_kind": "process",
+            "src_process_cmd": "com.example.app",
+            "dst_kind": "netflow",
+            "dst_addr": "10.0.0.2",
+            "dst_port": "443",
+        }
+
+        text = clearscope_residual_text_v33_e5_android_safe(row)
+
+        self.assertIn("netflow", text.split())
+        self.assertNotIn("10_0_0_2", text)
+        self.assertNotIn("443", text.split())
 
 
 if __name__ == "__main__":
