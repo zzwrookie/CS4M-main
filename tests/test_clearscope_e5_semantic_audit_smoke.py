@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import subprocess
 import sys
 import textwrap
@@ -306,6 +308,22 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
             )
             self.assertTrue(paths["fallback_csv"].endswith("fallback_counts.csv"))
             self.assertTrue(paths["collision_csv"].endswith("collision_groups.csv"))
+
+            for path in paths.values():
+                self.assertTrue(Path(path).is_file(), path)
+
+            label_free = json.loads(Path(paths["label_free_json"]).read_text())
+            self.assertEqual(label_free["node_count"], 1)
+            self.assertEqual(label_free["fallback_counts"], {"netflow": 1})
+
+            fallback_csv = Path(paths["fallback_csv"]).read_text()
+            self.assertIn("netflow", fallback_csv)
+            self.assertTrue(
+                "token,count" in fallback_csv or "count,token" in fallback_csv
+            )
+
+            collision_csv = Path(paths["collision_csv"]).read_text()
+            self.assertIn("tmp_file", collision_csv)
 
 
 if __name__ == "__main__":
