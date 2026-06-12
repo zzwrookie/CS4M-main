@@ -255,6 +255,11 @@ ACTION_TYPE_ALERT_POLICIES = {
     "cadets_e4_v2_group_v1",
     "clearscope_node_pair_v1",
     "clearscope_android_v2",
+    "clearscope_v31_fp_guard_v1",
+    "clearscope_v31_fp_guard_v2",
+    "clearscope_v31_fp_guard_v3",
+    "clearscope_v31_fp_guard_v3b",
+    "clearscope_v31_fp_guard_v3c",
 }
 SSPM_CONDITIONAL_HEAD_ARCHES = {
     CONDITIONAL_HEAD_ARCH_SHARED_V1,
@@ -268,6 +273,7 @@ NODE_POOL_SCORE_MODES = {
     "base_conf_residual",
     "base_conf_repeat_chain",
     "base_conf_residual_repeat_chain",
+    "base_conf_v31_support",
     "pool_base",
     "pool_base_adaptive",
     "pool_base_assoc",
@@ -644,6 +650,12 @@ ACTION_TYPE_POLICY_EVENT_FIELDS = EVENT_RAW_FIELDS + [
     "alert_priority",
     "node_evidence",
     "budget_capped",
+    "policy_support_reason",
+    "policy_margin_used",
+    "src_prior_alert_count",
+    "dst_prior_alert_count",
+    "src_prior_node_evidence_count",
+    "dst_prior_node_evidence_count",
 ]
 ACTION_TYPE_POLICY_SUMMARY_FIELDS = [
     "dataset",
@@ -1112,6 +1124,13 @@ class OnlineNodeCoverageTracker:
             key=lambda row: (-float(row["max_event_score"]), int(row["node_idx"])),
         )
 
+    def alert_count(self, node_idx: int) -> int:
+        """Return the online alert count observed so far for one node."""
+        state = self._nodes.get(int(node_idx))
+        if state is None:
+            return 0
+        return int(state.get("alert_count", 0))
+
     def estimated_mb(self) -> float:
         total = sys.getsizeof(self._nodes)
         for key, value in self._nodes.items():
@@ -1334,6 +1353,8 @@ class SlimConfig:
     action_type_alert_policy: str = "default"
     node_pool_score_mode: str = "base_conf"
     node_pool_topk_values: str = "100,200,500,1000,1500,3000,5000,10000,20000,30000"
+    clearscope_v31_fp_guard_write_floor: float = 0.085
+    clearscope_v31_fp_guard_read_floor: float = 0.060
     slim_split_override: bool = False
     compat_in_memory_outputs: bool = False
     synthetic_smoke: bool = False

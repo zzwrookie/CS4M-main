@@ -17,6 +17,10 @@ def _action_type_alert_policy_decision(
     config: SlimConfig,
     row: np.void,
     raw_alert: bool,
+    score: float | None = None,
+    threshold: float | None = None,
+    alert_row: Mapping[str, Any] | None = None,
+    policy_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return alert eligibility for action/type policy without changing event score."""
     policy = str(config.action_type_alert_policy)
@@ -24,7 +28,9 @@ def _action_type_alert_policy_decision(
         raise ValueError(
             "ACTION_TYPE_ALERT_POLICY must be default, theia_v1, "
             "cadets_e4_v2_group_v1, clearscope_node_pair_v1, "
-            "or clearscope_android_v2",
+            "clearscope_android_v2, clearscope_v31_fp_guard_v1, "
+            "clearscope_v31_fp_guard_v2, clearscope_v31_fp_guard_v3, "
+            "clearscope_v31_fp_guard_v3b, or clearscope_v31_fp_guard_v3c",
         )
     if not bool(raw_alert):
         return {
@@ -47,6 +53,200 @@ def _action_type_alert_policy_decision(
         }
 
     group = (action, src_type, dst_type)
+    if policy in {
+        "clearscope_v31_fp_guard_v1",
+        "clearscope_v31_fp_guard_v2",
+        "clearscope_v31_fp_guard_v3",
+        "clearscope_v31_fp_guard_v3b",
+        "clearscope_v31_fp_guard_v3c",
+    }:
+        demoted_to_evidence = {
+            ("EVENT_OPEN", "process", "process"),
+            ("EVENT_READ", "process", "process"),
+        }
+        if group in demoted_to_evidence:
+            return {
+                "policy_name": policy,
+                "alert_decision": "demoted_event",
+                "alert_priority": "node_evidence",
+                "final_alert": False,
+                "node_evidence": True,
+                "budget_capped": False,
+            }
+        if policy in {
+            "clearscope_v31_fp_guard_v2",
+            "clearscope_v31_fp_guard_v3",
+            "clearscope_v31_fp_guard_v3b",
+            "clearscope_v31_fp_guard_v3c",
+        }:
+            floor_by_group = {
+                ("EVENT_WRITE", "process", "file"): float(
+                    config.clearscope_v31_fp_guard_write_floor,
+                ),
+                ("EVENT_READ", "file", "process"): float(
+                    config.clearscope_v31_fp_guard_read_floor,
+                ),
+            }
+            if group in floor_by_group:
+                score_value = float(score if score is not None else 0.0)
+                threshold_value = float(threshold if threshold is not None else 0.0)
+                floor = max(float(floor_by_group[group]), threshold_value)
+                if score_value < floor:
+                    return {
+                        "policy_name": policy,
+                        "alert_decision": "demoted_event",
+                        "alert_priority": "node_evidence",
+                        "final_alert": False,
+                        "node_evidence": True,
+                        "budget_capped": False,
+                    }
+                if policy == "clearscope_v31_fp_guard_v3" and alert_row is not None:
+                    validation_group_count = int(
+                        float(alert_row.get("validation_group_count", 0) or 0),
+                    )
+                    endpoint_pair_count = int(
+                        float(alert_row.get("endpoint_validation_pair_count", 0) or 0),
+                    )
+                    src_endpoint_count = int(
+                        float(alert_row.get("src_endpoint_count", 0) or 0),
+                    )
+                    target_case = str(alert_row.get("target_case", "")).lower()
+                    validation_bucket = str(
+                        alert_row.get("validation_count_bucket", ""),
+                    ).lower()
+                    low_support = target_case in {"both_cold", "cold", "low_support"}
+                    low_support = low_support or validation_bucket in {
+                        "low",
+                        "low_support",
+                    }
+                    narrow_margin = score_value < floor + 0.005
+                    common_endpoint = (
+                        endpoint_pair_count >= 20 or src_endpoint_count >= 20
+                    )
+                    if (
+                        narrow_margin
+                        and validation_group_count >= 1000
+                        and common_endpoint
+                        and not low_support
+                    ):
+                        return {
+                            "policy_name": policy,
+                            "alert_decision": "demoted_event",
+                            "alert_priority": "node_evidence",
+                            "final_alert": False,
+                            "node_evidence": True,
+                            "budget_capped": False,
+                        }
+                if (
+                    policy in {
+                        "clearscope_v31_fp_guard_v3b",
+                        "clearscope_v31_fp_guard_v3c",
+                    }
+                    and alert_row is not None
+                ):
+                    validation_group_count = int(
+                        float(alert_row.get("validation_group_count", 0) or 0),
+                    )
+                    target_case = str(alert_row.get("target_case", "")).lower()
+                    validation_bucket = str(
+                        alert_row.get("validation_count_bucket", ""),
+                    ).lower()
+                    low_support = target_case in {
+                        "both_cold",
+                        "both_cold_action_target",
+                        "cold",
+                        "low_support",
+                    }
+                    low_support = low_support or validation_bucket in {
+                        "low",
+                        "low_support",
+                    }
+                    if policy == "clearscope_v31_fp_guard_v3c":
+                        margin_by_group = {
+                            ("EVENT_READ", "file", "process"): 0.0015,
+                            ("EVENT_WRITE", "process", "file"): 0.002,
+                        }
+                        support_by_group = {
+                            ("EVENT_READ", "file", "process"): (2, 4),
+                            ("EVENT_WRITE", "process", "file"): (1, 2),
+                        }
+                    else:
+                        margin_by_group = {
+                            ("EVENT_READ", "file", "process"): 0.003,
+                            ("EVENT_WRITE", "process", "file"): 0.002,
+                        }
+                        support_by_group = {
+                            ("EVENT_READ", "file", "process"): (1, 2),
+                            ("EVENT_WRITE", "process", "file"): (1, 2),
+                        }
+                    margin = float(margin_by_group.get(group, 0.0))
+                    alert_support_threshold, evidence_support_threshold = (
+                        support_by_group.get(group, (1, 2))
+                    )
+                    context = dict(policy_context or {})
+                    prior_alert_support = max(
+                        int(context.get("src_alert_count", 0) or 0),
+                        int(context.get("dst_alert_count", 0) or 0),
+                    )
+                    prior_evidence_support = max(
+                        int(context.get("src_node_evidence_count", 0) or 0),
+                        int(context.get("dst_node_evidence_count", 0) or 0),
+                    )
+                    prior_support = (
+                        prior_alert_support >= alert_support_threshold
+                        or prior_evidence_support >= evidence_support_threshold
+                    )
+                    if (
+                        margin > 0.0
+                        and score_value < floor + margin
+                        and validation_group_count >= 1000
+                        and prior_support
+                        and not low_support
+                    ):
+                        if policy == "clearscope_v31_fp_guard_v3c" and group == (
+                            "EVENT_READ",
+                            "file",
+                            "process",
+                        ):
+                            if prior_alert_support >= alert_support_threshold:
+                                support_reason = "v3c_read_strict_prior_alert"
+                            else:
+                                support_reason = "v3c_read_strict_prior_evidence"
+                        elif prior_alert_support >= alert_support_threshold:
+                            support_reason = "v3b_node_evidence_prior_alert"
+                        else:
+                            support_reason = "v3b_node_evidence_prior_evidence"
+                        return {
+                            "policy_name": policy,
+                            "alert_decision": "demoted_event",
+                            "alert_priority": "node_evidence",
+                            "final_alert": False,
+                            "node_evidence": True,
+                            "budget_capped": False,
+                            "policy_support_reason": support_reason,
+                            "policy_margin_used": margin,
+                            "src_prior_alert_count": int(
+                                context.get("src_alert_count", 0) or 0,
+                            ),
+                            "dst_prior_alert_count": int(
+                                context.get("dst_alert_count", 0) or 0,
+                            ),
+                            "src_prior_node_evidence_count": int(
+                                context.get("src_node_evidence_count", 0) or 0,
+                            ),
+                            "dst_prior_node_evidence_count": int(
+                                context.get("dst_node_evidence_count", 0) or 0,
+                            ),
+                        }
+        return {
+            "policy_name": policy,
+            "alert_decision": "event_alert",
+            "alert_priority": "default",
+            "final_alert": True,
+            "node_evidence": False,
+            "budget_capped": False,
+        }
+
     if policy == "cadets_e4_v2_group_v1":
         high_priority = {
             ("EVENT_RECVFROM", "netflow", "process"),

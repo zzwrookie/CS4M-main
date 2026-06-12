@@ -207,6 +207,7 @@ def _score_phase3g_conditional_fast_stream(
     start_rss_mb = _current_rss_mb()
     test_phase_peak_rss_mb = start_rss_mb
     node_coverage = OnlineNodeCoverageTracker()
+    node_evidence_by_node: dict[int, int] = {}
     target_case_counts = {
         EVENT_SEMANTIC_TARGET: 0,
         BOTH_COLD_ACTION_TARGET: 0,
@@ -702,10 +703,22 @@ def _score_phase3g_conditional_fast_stream(
                                 suppressed_writer.write_row(suppressed_row)
                             elif not _online_minimal_enabled(config):
                                 suppressed_event_alerts_raw.append(suppressed_row)
+                src_idx = int(row["src_node_idx"])
+                dst_idx = int(row["dst_node_idx"])
+                policy_context = {
+                    "src_alert_count": node_coverage.alert_count(src_idx),
+                    "dst_alert_count": node_coverage.alert_count(dst_idx),
+                    "src_node_evidence_count": node_evidence_by_node.get(src_idx, 0),
+                    "dst_node_evidence_count": node_evidence_by_node.get(dst_idx, 0),
+                }
                 policy_decision = _action_type_alert_policy_decision(
                     config=config,
                     row=row,
                     raw_alert=bool(alert),
+                    score=float(event_score),
+                    threshold=float(threshold_value),
+                    alert_row=alert_row,
+                    policy_context=policy_context,
                 )
                 group_key_for_policy = (
                     int(row["action_id"]),
@@ -731,6 +744,12 @@ def _score_phase3g_conditional_fast_stream(
                 )
                 action_policy["threshold_count"] = int(action_policy["threshold_count"]) + 1
                 if bool(policy_decision["node_evidence"]):
+                    node_evidence_by_node[src_idx] = (
+                        int(node_evidence_by_node.get(src_idx, 0)) + 1
+                    )
+                    node_evidence_by_node[dst_idx] = (
+                        int(node_evidence_by_node.get(dst_idx, 0)) + 1
+                    )
                     node_evidence_count += 1
                     action_policy["node_evidence_count"] = (
                         int(action_policy["node_evidence_count"]) + 1
@@ -744,6 +763,30 @@ def _score_phase3g_conditional_fast_stream(
                                 "alert_priority": policy_decision["alert_priority"],
                                 "node_evidence": policy_decision["node_evidence"],
                                 "budget_capped": policy_decision["budget_capped"],
+                                "policy_support_reason": policy_decision.get(
+                                    "policy_support_reason",
+                                    "",
+                                ),
+                                "policy_margin_used": policy_decision.get(
+                                    "policy_margin_used",
+                                    "",
+                                ),
+                                "src_prior_alert_count": policy_decision.get(
+                                    "src_prior_alert_count",
+                                    "",
+                                ),
+                                "dst_prior_alert_count": policy_decision.get(
+                                    "dst_prior_alert_count",
+                                    "",
+                                ),
+                                "src_prior_node_evidence_count": policy_decision.get(
+                                    "src_prior_node_evidence_count",
+                                    "",
+                                ),
+                                "dst_prior_node_evidence_count": policy_decision.get(
+                                    "dst_prior_node_evidence_count",
+                                    "",
+                                ),
                             },
                         )
                 if str(policy_decision["alert_decision"]) == "demoted_event":
@@ -872,8 +915,6 @@ def _score_phase3g_conditional_fast_stream(
                         alert_row.update(threshold_trace)
                     if event_writer is not None:
                         event_writer.write_row(alert_row)
-                    src_idx = int(row["src_node_idx"])
-                    dst_idx = int(row["dst_node_idx"])
                     event_id = int(row["event_id"])
                     node_coverage.observe(
                         node_idx=src_idx,
@@ -1456,6 +1497,7 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
         idx_to_db_node_id=idx_to_db_node_id,
         abnormal_db_node_ids=abnormal_nodes,
         topk_values=_parse_int_list(config.node_pool_topk_values),
+        node_pool_score_mode=str(config.node_pool_score_mode),
     )
     group_alert_policy_rows = _phase3g_update_group_report_rows_with_eval(
         path=output_dir / "group_alert_policy_summary.csv",

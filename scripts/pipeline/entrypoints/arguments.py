@@ -703,6 +703,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--node_pool_topk_values",
         default=SlimConfig.node_pool_topk_values,
     )
+    parser.add_argument(
+        "--clearscope_v31_fp_guard_write_floor",
+        type=float,
+        default=SlimConfig.clearscope_v31_fp_guard_write_floor,
+    )
+    parser.add_argument(
+        "--clearscope_v31_fp_guard_read_floor",
+        type=float,
+        default=SlimConfig.clearscope_v31_fp_guard_read_floor,
+    )
     parser.add_argument("--slim_split_override", action="store_true")
     parser.add_argument("--compat_in_memory_outputs", action="store_true")
     parser.add_argument(
@@ -782,7 +792,9 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
         raise ValueError(
             "ACTION_TYPE_ALERT_POLICY must be default, theia_v1, "
             "cadets_e4_v2_group_v1, clearscope_node_pair_v1, "
-            "or clearscope_android_v2",
+            "clearscope_android_v2, clearscope_v31_fp_guard_v1, "
+            "clearscope_v31_fp_guard_v2, clearscope_v31_fp_guard_v3, "
+            "clearscope_v31_fp_guard_v3b, or clearscope_v31_fp_guard_v3c",
         )
     if (
         str(config.sspm_update_gate_score_space) == "conditional_event_score"
