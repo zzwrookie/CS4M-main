@@ -9,12 +9,17 @@ CLEARSCOPE_SEMANTIC_RULES_VERSION = CLEARSCOPE_LEGACY_SEMANTIC_MODE
 CLEARSCOPE_REFINED_SEMANTIC_MODE = "raw_detail_v2_refined"
 CLEARSCOPE_V3_SEMANTIC_MODE = "raw_detail_v3_discriminative"
 CLEARSCOPE_V31_SEMANTIC_MODE = "raw_detail_v31_discriminative"
+CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_MODE = "raw_detail_v33b_e5_android_safe"
 CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE = "raw_detail_v33_e5_android_safe"
 CLEARSCOPE_V32_SEMANTIC_MODE = "raw_detail_v32_discriminative"
 CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE = "raw_detail_v32_cache_only_discriminative"
 CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_ALIASES = {
     "raw_detail_v32_cache_only_discriminative",
     "clearscope_raw_detail_v32_cache_only_discriminative",
+}
+CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_ALIASES = {
+    "raw_detail_v33b_e5_android_safe",
+    "clearscope_raw_detail_v33b_e5_android_safe",
 }
 CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_ALIASES = {
     "raw_detail_v33_e5_android_safe",
@@ -67,6 +72,8 @@ def is_clearscope_dataset(dataset: object) -> bool:
 def normalize_clearscope_semantic_mode(semantic_mode: object = "") -> str:
     """Return the canonical ClearScope semantic mode, defaulting to v3."""
     text = str(semantic_mode or "").strip().lower()
+    if text in CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_MODE
     if text in CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_ALIASES:
         return CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE
     if text in CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_ALIASES:
@@ -677,6 +684,48 @@ def clearscope_file_natural_tokens_v33_e5_android_safe(path: object) -> tuple[st
     """Return v33 E5-safe natural ClearScope file tokens."""
     label = classify_android_file_nll_v33_e5_android_safe(path)
     return ("file", label, android_file_detail_v33_e5_android_safe(path, label))
+
+
+def _accounting_detail(path: str) -> tuple[str, str] | None:
+    if path == "/acct":
+        return ("android_accounting_root", "acct_root")
+    if re.fullmatch(r"/acct/uid_[0-9]+", path):
+        return ("android_accounting_uid", "acct_uid")
+    if re.fullmatch(r"/acct/uid_[0-9]+/pid_[0-9]+", path):
+        return ("android_accounting_pid", "acct_pid")
+    if path.startswith("/acct/"):
+        return ("android_accounting_other", "acct_other")
+    return None
+
+
+def classify_android_file_nll_v33b_e5_android_safe(path: object) -> str:
+    """Return the v33b E5-safe ClearScope Android file coarse label."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    accounting = _accounting_detail(p)
+    if accounting is not None:
+        return accounting[0]
+    return classify_android_file_nll_v33_e5_android_safe(path)
+
+
+def android_file_detail_v33b_e5_android_safe(
+    path: object,
+    label: str | None = None,
+) -> str:
+    """Return the v33b E5-safe ClearScope Android file detail token."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    accounting = _accounting_detail(p)
+    if accounting is not None:
+        return accounting[1]
+    actual_label = label or classify_android_file_nll_v33b_e5_android_safe(p)
+    return android_file_detail_v33_e5_android_safe(path, actual_label)
+
+
+def clearscope_file_natural_tokens_v33b_e5_android_safe(path: object) -> tuple[str, ...]:
+    """Return v33b E5-safe natural ClearScope file tokens."""
+    label = classify_android_file_nll_v33b_e5_android_safe(path)
+    return ("file", label, android_file_detail_v33b_e5_android_safe(path, label))
 
 
 def _cache2_entries_profile_shape(path: str) -> str:
