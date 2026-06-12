@@ -479,6 +479,32 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
             ],
         )
 
+    def test_collision_rows_sanitize_accounting_high_cardinality_examples(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import build_collision_rows
+
+        nodes = [
+            AuditNode(
+                1,
+                "acct-a",
+                "file",
+                "/acct/uid_0/pid_549",
+                ("file", "android_accounting_pid", "acct_pid"),
+            ),
+            AuditNode(
+                2,
+                "acct-b",
+                "file",
+                "/acct/uid_1000/pid_12345",
+                ("file", "android_accounting_pid", "acct_pid"),
+            ),
+        ]
+
+        rows = build_collision_rows(nodes)
+
+        self.assertEqual(rows[0]["token"], "acct_pid")
+        self.assertEqual(rows[0]["raw_detail_count"], 2)
+        self.assertEqual(rows[0]["examples"], ["/acct/uid_<uid>/pid_<pid>"])
+
     def test_write_reports_creates_json_and_csv(self) -> None:
         from tempfile import TemporaryDirectory
 

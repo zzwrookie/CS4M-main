@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -313,7 +314,7 @@ def build_collision_rows(
         {
             "token": token,
             "raw_detail_count": len(raw_values),
-            "examples": sorted(raw_values)[:10],
+            "examples": sorted({_display_raw_detail(raw_value) for raw_value in raw_values})[:10],
         }
         for token, raw_values in raw_by_token.items()
         if len(raw_values) >= int(min_raw_details)
@@ -322,6 +323,17 @@ def build_collision_rows(
         rows,
         key=lambda row: (-int(row["raw_detail_count"]), str(row["token"])),
     )
+
+
+def _display_raw_detail(raw_detail: object) -> str:
+    text = str(raw_detail or "")
+    if text == "/acct":
+        return "/acct"
+    if re.fullmatch(r"/acct/uid_[0-9]+", text):
+        return "/acct/uid_<uid>"
+    if re.fullmatch(r"/acct/uid_[0-9]+/pid_[0-9]+", text):
+        return "/acct/uid_<uid>/pid_<pid>"
+    return text
 
 
 def fallback_rows_from_summary(summary: dict[str, object]) -> list[dict[str, object]]:
