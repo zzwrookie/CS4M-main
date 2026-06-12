@@ -885,6 +885,25 @@ def clearscope_residual_text_v33_e5_android_safe(row: dict[str, object]) -> str:
     return " ".join(clearscope_residual_tokens_v33_e5_android_safe(row))
 
 
+def clearscope_residual_tokens_v33b_e5_android_safe(
+    row: dict[str, object],
+) -> tuple[str, ...]:
+    """Return v33b E5-safe ClearScope residual sentence tokens for one event row."""
+    action = _refined_action_token(row.get("action", "unknown"))
+    tokens = [
+        *_clearscope_v33b_e5_android_safe_node_tokens(row, "src"),
+        "event",
+        action,
+        *_clearscope_v33b_e5_android_safe_node_tokens(row, "dst"),
+    ]
+    return tuple(str(token) for token in tokens if str(token).strip())
+
+
+def clearscope_residual_text_v33b_e5_android_safe(row: dict[str, object]) -> str:
+    """Return v33b E5-safe ClearScope residual sentence text."""
+    return " ".join(clearscope_residual_tokens_v33b_e5_android_safe(row))
+
+
 def _clearscope_v32_socket_context_tokens(row: dict[str, object]) -> tuple[str, ...]:
     action = _refined_action_token(row.get("action", "unknown"))
     src_kind = normalize_refined_token(row.get("src_kind", ""), max_len=30)
@@ -1197,6 +1216,22 @@ def _clearscope_v33_e5_android_safe_node_tokens(
         return android_process_natural_tokens_refined(row.get(f"{side}_process_cmd", ""))
     if kind == "file":
         return clearscope_file_natural_tokens_v33_e5_android_safe(
+            row.get(f"{side}_file_path", ""),
+        )
+    if kind == "netflow":
+        return clearscope_netflow_natural_tokens_refined()
+    return (kind or "unknown",)
+
+
+def _clearscope_v33b_e5_android_safe_node_tokens(
+    row: dict[str, object],
+    side: str,
+) -> tuple[str, ...]:
+    kind = normalize_refined_token(row.get(f"{side}_kind", ""), max_len=30)
+    if kind == "process":
+        return android_process_natural_tokens_refined(row.get(f"{side}_process_cmd", ""))
+    if kind == "file":
+        return clearscope_file_natural_tokens_v33b_e5_android_safe(
             row.get(f"{side}_file_path", ""),
         )
     if kind == "netflow":

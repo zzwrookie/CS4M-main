@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from cs4m.semantics.clearscope_android import (
+    CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_MODE,
     CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE,
+    clearscope_residual_text_v33b_e5_android_safe,
     clearscope_residual_text_v33_e5_android_safe,
 )
 from scripts.pipeline.config.runtime_config import *
@@ -424,6 +426,8 @@ def residual_text(
             return clearscope_residual_text_v32_cache_only(dict(row))
         if clearscope_mode == CLEARSCOPE_V32_SEMANTIC_MODE:
             return clearscope_residual_text_v32(dict(row))
+        if clearscope_mode == CLEARSCOPE_V33B_E5_ANDROID_SAFE_SEMANTIC_MODE:
+            return clearscope_residual_text_v33b_e5_android_safe(dict(row))
         if clearscope_mode == CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE:
             return clearscope_residual_text_v33_e5_android_safe(dict(row))
         if clearscope_mode == CLEARSCOPE_V31_SEMANTIC_MODE:

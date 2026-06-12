@@ -11,6 +11,7 @@ from cs4m.semantics.clearscope_android import (
     clearscope_file_natural_tokens_v31,
     clearscope_file_natural_tokens_v33b_e5_android_safe,
     clearscope_file_natural_tokens_v33_e5_android_safe,
+    clearscope_residual_text_v33b_e5_android_safe,
     clearscope_residual_text_v33_e5_android_safe,
     normalize_clearscope_semantic_mode,
 )
@@ -200,6 +201,39 @@ class ClearScopeE5V33SemanticsTests(unittest.TestCase):
 
         self.assertIn("android_sdcardfs_appid", text.split())
         self.assertIn("de_belu_appstarter_appid", text.split())
+
+    def test_v33b_residual_text_uses_accounting_detail(self) -> None:
+        row = {
+            "action": "EVENT_READ",
+            "src_kind": "process",
+            "src_process_cmd": "com.android.providers.contacts",
+            "dst_kind": "file",
+            "dst_file_path": "/acct/uid_0/pid_549",
+        }
+
+        text = clearscope_residual_text_v33b_e5_android_safe(row)
+
+        self.assertIn("android_accounting_pid", text.split())
+        self.assertIn("acct_pid", text.split())
+        self.assertNotIn("pid_549", text)
+
+    def test_pipeline_residual_text_routes_v33b_mode(self) -> None:
+        row = {
+            "action": "EVENT_READ",
+            "src_kind": "process",
+            "src_process_cmd": "com.android.providers.contacts",
+            "dst_kind": "file",
+            "dst_file_path": "/acct/uid_0/pid_549",
+        }
+
+        text = residual_text(
+            row,
+            dataset="CLEARSCOPE_E5",
+            semantic_mode="raw_detail_v33b_e5_android_safe",
+        )
+
+        self.assertIn("android_accounting_pid", text.split())
+        self.assertIn("acct_pid", text.split())
 
     def test_pipeline_residual_text_default_does_not_route_v33_mode(self) -> None:
         row = {

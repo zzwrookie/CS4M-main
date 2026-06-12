@@ -213,6 +213,24 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
             ("file", "android_sdcardfs_appid", "de_belu_appstarter_appid"),
         )
 
+    def test_tokenize_file_row_v33b_uses_accounting_detail(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 17,
+                "node_uuid": "file-node-v33b",
+                "node_type": "file",
+                "path": "/acct/uid_0/pid_549",
+            },
+            semantic_mode="raw_detail_v33b_e5_android_safe",
+        )
+
+        self.assertEqual(
+            node.semantic_tokens,
+            ("file", "android_accounting_pid", "acct_pid"),
+        )
+
     def test_tokenize_file_row_accepts_v31_semantic_alias(self) -> None:
         from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
 
@@ -283,6 +301,24 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
         )
 
         self.assertEqual(node.node_type, "netflow")
+        self.assertEqual(node.semantic_tokens, ("netflow",))
+
+    def test_tokenize_netflow_row_keeps_fixed_clear_scope_netflow_under_v33b(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 18,
+                "node_uuid": "netflow-node-v33b",
+                "node_type": "netflow",
+                "src_addr": "10.0.0.1",
+                "src_port": "123",
+                "dst_addr": "10.0.0.2",
+                "dst_port": "443",
+            },
+            semantic_mode="raw_detail_v33b_e5_android_safe",
+        )
+
         self.assertEqual(node.semantic_tokens, ("netflow",))
 
     def test_module_import_without_psycopg2_and_connect_db_error_is_clear(self) -> None:
