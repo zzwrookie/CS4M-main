@@ -229,6 +229,84 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_build_event_tuple_summary_counts_support_and_oov(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import (
+            build_event_tuple_summary,
+        )
+
+        nodes = {
+            1: AuditNode(
+                1,
+                "p",
+                "subject",
+                "proc",
+                ("process", "native_process", "toybox"),
+            ),
+            2: AuditNode(
+                2,
+                "f",
+                "file",
+                "/system/bin/sh",
+                ("file", "android_system_file", "bin_sh"),
+            ),
+            3: AuditNode(
+                3,
+                "x",
+                "file",
+                "/data/local/tmp/x",
+                ("file", "android_tmp_file", "tmp_file"),
+            ),
+        }
+        events = [
+            {
+                "split": "train",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 2,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 2,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_WRITE",
+                "src_index_id": 1,
+                "dst_index_id": 3,
+            },
+        ]
+
+        summary = build_event_tuple_summary(events, nodes)
+
+        self.assertEqual(summary["event_count"], 3)
+        self.assertEqual(summary["test_oov_tuple_count"], 1)
+        self.assertEqual(summary["test_seen_tuple_count"], 1)
+
+    def test_write_reports_creates_json_and_csv(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import write_reports
+
+        with TemporaryDirectory() as tmpdir:
+            paths = write_reports(
+                output_dir=tmpdir,
+                label_free_summary={"node_count": 1, "fallback_counts": {"netflow": 1}},
+                label_aware_diagnostics={
+                    "warning": "label_aware_diagnostic_only_not_runtime_policy"
+                },
+                fallback_rows=[{"token": "netflow", "count": 1}],
+                collision_rows=[{"token": "tmp_file", "raw_detail_count": 2}],
+            )
+
+            self.assertTrue(paths["label_free_json"].endswith("label_free_summary.json"))
+            self.assertTrue(
+                paths["label_aware_json"].endswith("label_aware_diagnostics.json")
+            )
+            self.assertTrue(paths["fallback_csv"].endswith("fallback_counts.csv"))
+            self.assertTrue(paths["collision_csv"].endswith("collision_groups.csv"))
+
 
 if __name__ == "__main__":
     unittest.main()

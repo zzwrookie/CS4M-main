@@ -161,3 +161,138 @@ def build_label_aware_diagnostics(
             if len(raw_values) > 1
         },
     }
+
+
+def _event_tuple(
+    event: dict[str, Any],
+    nodes_by_index: dict[int, AuditNode],
+) -> tuple[str, ...] | None:
+    src = nodes_by_index.get(int(event["src_index_id"]))
+    dst = nodes_by_index.get(int(event["dst_index_id"]))
+    if src is None or dst is None:
+        return None
+    return (
+        str(event["operation"]),
+        src.node_type,
+        dst.node_type,
+        extract_detail_token(src),
+        extract_detail_token(dst),
+    )
+
+
+def build_event_tuple_summary(
+    events: Iterable[dict[str, Any]],
+    nodes_by_index: dict[int, AuditNode],
+) -> dict[str, object]:
+    """Summarize label-free event tuple support and test OOV."""
+    event_count = 0
+    train_tuples: Counter[tuple[str, ...]] = Counter()
+    test_tuples: Counter[tuple[str, ...]] = Counter()
+    split_counts: Counter[str] = Counter()
+    operation_counts: Counter[str] = Counter()
+    for event in events:
+        tuple_key = _event_tuple(event, nodes_by_index)
+        if tuple_key is None:
+            continue
+        event_count += 1
+        split = str(event["split"])
+        operation = str(event["operation"])
+        split_counts[split] += 1
+        operation_counts[operation] += 1
+        if split == "train":
+            train_tuples[tuple_key] += 1
+        elif split == "test":
+            test_tuples[tuple_key] += 1
+    test_oov = {
+        tuple_key: count
+        for tuple_key, count in test_tuples.items()
+        if tuple_key not in train_tuples
+    }
+    test_seen = {
+        tuple_key: count
+        for tuple_key, count in test_tuples.items()
+        if tuple_key in train_tuples
+    }
+    return {
+        "event_count": event_count,
+        "split_counts": dict(sorted(split_counts.items())),
+        "operation_counts": dict(sorted(operation_counts.items())),
+        "train_tuple_count": len(train_tuples),
+        "test_tuple_count": len(test_tuples),
+        "test_oov_tuple_count": len(test_oov),
+        "test_seen_tuple_count": len(test_seen),
+        "top_test_oov_tuples": [
+            {"tuple": list(tuple_key), "count": count}
+            for tuple_key, count in Counter(test_oov).most_common(50)
+        ],
+    }
+
+
+def build_collision_rows(
+    nodes: Iterable[AuditNode],
+    min_raw_details: int = 2,
+) -> list[dict[str, object]]:
+    """Return detail tokens that collapse multiple raw details."""
+    raw_by_token: dict[str, set[str]] = defaultdict(set)
+    for node in nodes:
+        raw_by_token[extract_detail_token(node)].add(node.raw_detail)
+    rows = [
+        {
+            "token": token,
+            "raw_detail_count": len(raw_values),
+            "examples": sorted(raw_values)[:10],
+        }
+        for token, raw_values in raw_by_token.items()
+        if len(raw_values) >= int(min_raw_details)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (-int(row["raw_detail_count"]), str(row["token"])),
+    )
+
+
+def fallback_rows_from_summary(summary: dict[str, object]) -> list[dict[str, object]]:
+    """Return fallback count rows for CSV output."""
+    counts = dict(summary.get("fallback_counts", {}))
+    return [{"token": token, "count": count} for token, count in sorted(counts.items())]
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    fieldnames = sorted({key for row in rows for key in row.keys()})
+    if not fieldnames:
+        fieldnames = ["empty"]
+        rows = [{"empty": ""}]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_reports(
+    output_dir: str | os.PathLike[str],
+    label_free_summary: dict[str, object],
+    label_aware_diagnostics: dict[str, object],
+    fallback_rows: list[dict[str, object]],
+    collision_rows: list[dict[str, object]],
+) -> dict[str, str]:
+    """Write E5 audit reports and return generated paths."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "label_free_json": str(out / "label_free_summary.json"),
+        "label_aware_json": str(out / "label_aware_diagnostics.json"),
+        "fallback_csv": str(out / "fallback_counts.csv"),
+        "collision_csv": str(out / "collision_groups.csv"),
+    }
+    _write_json(Path(paths["label_free_json"]), label_free_summary)
+    _write_json(Path(paths["label_aware_json"]), label_aware_diagnostics)
+    _write_csv(Path(paths["fallback_csv"]), fallback_rows)
+    _write_csv(Path(paths["collision_csv"]), collision_rows)
+    return paths
