@@ -411,7 +411,7 @@ def residual_text(
     process_semantic_config: ProcessSemanticConfig | None = None,
     max_tokens_per_node: int = 8,
     theia_netflow_policy: str = "scope_port",
-    semantic_mode: str = CLEARSCOPE_V3_SEMANTIC_MODE,
+    semantic_mode: str = CLEARSCOPE_REFINED_SEMANTIC_MODE,
 ) -> str:
     """Return residual text, using exact IP only for netflow rows."""
     if is_clearscope_dataset(dataset):

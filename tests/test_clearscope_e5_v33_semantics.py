@@ -141,6 +141,21 @@ class ClearScopeE5V33SemanticsTests(unittest.TestCase):
         self.assertIn("android_sdcardfs_appid", text.split())
         self.assertIn("de_belu_appstarter_appid", text.split())
 
+    def test_pipeline_residual_text_default_does_not_route_v33_mode(self) -> None:
+        row = {
+            "action": "EVENT_READ",
+            "src_kind": "process",
+            "src_process_cmd": "com.android.providers.contacts",
+            "dst_kind": "file",
+            "dst_file_path": "/config/sdcardfs/de.belu.appstarter/appid",
+        }
+
+        text = residual_text(row, dataset="CLEARSCOPE_E5")
+
+        self.assertIn("file_other", text.split())
+        self.assertIn("other", text.split())
+        self.assertNotIn("android_sdcardfs_appid", text.split())
+
     def test_v33_residual_text_keeps_netflow_fixed_coarse(self) -> None:
         row = {
             "action": "EVENT_CONNECT",
