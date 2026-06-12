@@ -82,13 +82,15 @@ class ClearScopeE5V33SemanticsTests(unittest.TestCase):
                 )
 
     def test_v33_unknown_device_stays_dev_other(self) -> None:
-        self.assertEqual(
-            android_file_detail_v33_e5_android_safe(
-                "/dev/msm_g711tlaw",
-                "android_device_file",
-            ),
-            "dev_other",
-        )
+        for path in ("/dev/msm_g711tlaw", "/dev/urandom", "/dev/kgsl-3d0"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    android_file_detail_v33_e5_android_safe(
+                        path,
+                        "android_device_file",
+                    ),
+                    "dev_other",
+                )
 
     def test_v31_targeted_path_is_unchanged(self) -> None:
         self.assertEqual(

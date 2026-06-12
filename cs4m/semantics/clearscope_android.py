@@ -653,7 +653,7 @@ def _device_detail_v33_e5_android_safe(path: str) -> str:
         "zero",
     }:
         return f"dev_{basename}"
-    return _device_detail_refined(path)
+    return "dev_other"
 
 
 def android_file_detail_v33_e5_android_safe(
