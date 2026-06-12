@@ -7,9 +7,34 @@ import re
 CLEARSCOPE_LEGACY_SEMANTIC_MODE = "clearscope_android_semantics_v1"
 CLEARSCOPE_SEMANTIC_RULES_VERSION = CLEARSCOPE_LEGACY_SEMANTIC_MODE
 CLEARSCOPE_REFINED_SEMANTIC_MODE = "raw_detail_v2_refined"
-CLEARSCOPE_REFINED_SEMANTIC_ALIASES = {
+CLEARSCOPE_V3_SEMANTIC_MODE = "raw_detail_v3_discriminative"
+CLEARSCOPE_V31_SEMANTIC_MODE = "raw_detail_v31_discriminative"
+CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE = "raw_detail_v33_e5_android_safe"
+CLEARSCOPE_V32_SEMANTIC_MODE = "raw_detail_v32_discriminative"
+CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE = "raw_detail_v32_cache_only_discriminative"
+CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_ALIASES = {
+    "raw_detail_v32_cache_only_discriminative",
+    "clearscope_raw_detail_v32_cache_only_discriminative",
+}
+CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_ALIASES = {
+    "raw_detail_v33_e5_android_safe",
+    "clearscope_raw_detail_v33_e5_android_safe",
+}
+CLEARSCOPE_V32_SEMANTIC_ALIASES = {
+    "raw_detail_v32_discriminative",
+    "clearscope_raw_detail_v32_discriminative",
+}
+CLEARSCOPE_V31_SEMANTIC_ALIASES = {
+    "raw_detail_v31_discriminative",
+    "clearscope_raw_detail_v31_discriminative",
+}
+CLEARSCOPE_V3_SEMANTIC_ALIASES = {
     "",
     "default",
+    "raw_detail_v3_discriminative",
+    "clearscope_raw_detail_v3_discriminative",
+}
+CLEARSCOPE_REFINED_SEMANTIC_ALIASES = {
     "raw_detail_v2_refined",
     "clearscope_raw_detail_v2_refined",
 }
@@ -29,6 +54,9 @@ UNKNOWN_ENDPOINT_VALUES = {
     "null",
     "unknown",
 }
+HEX_BLOB_RE = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
+NUMERIC_ID_RE = re.compile(r"^[0-9]+$")
+MIXED_ID_RE = re.compile(r"^(?=.*[0-9])(?=.*[a-z])[0-9a-z_-]{16,}$", re.IGNORECASE)
 
 
 def is_clearscope_dataset(dataset: object) -> bool:
@@ -37,13 +65,23 @@ def is_clearscope_dataset(dataset: object) -> bool:
 
 
 def normalize_clearscope_semantic_mode(semantic_mode: object = "") -> str:
-    """Return the canonical ClearScope semantic mode, defaulting to refined."""
+    """Return the canonical ClearScope semantic mode, defaulting to v3."""
     text = str(semantic_mode or "").strip().lower()
+    if text in CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V33_E5_ANDROID_SAFE_SEMANTIC_MODE
+    if text in CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE
+    if text in CLEARSCOPE_V32_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V32_SEMANTIC_MODE
+    if text in CLEARSCOPE_V31_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V31_SEMANTIC_MODE
+    if text in CLEARSCOPE_V3_SEMANTIC_ALIASES:
+        return CLEARSCOPE_V3_SEMANTIC_MODE
     if text in CLEARSCOPE_REFINED_SEMANTIC_ALIASES:
         return CLEARSCOPE_REFINED_SEMANTIC_MODE
     if text in CLEARSCOPE_LEGACY_SEMANTIC_ALIASES:
         return CLEARSCOPE_LEGACY_SEMANTIC_MODE
-    return CLEARSCOPE_REFINED_SEMANTIC_MODE
+    return CLEARSCOPE_V3_SEMANTIC_MODE
 
 
 def clearscope_semantic_mode_is_legacy(semantic_mode: object = "") -> bool:
@@ -483,6 +521,209 @@ def clearscope_file_natural_tokens_refined(path: object) -> tuple[str, ...]:
     return ("file", label, android_file_detail_refined(path, label))
 
 
+def android_file_detail_v3(path: object, label: str | None = None) -> str:
+    """Return the v3 ClearScope Android file detail token."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    actual_label = label or classify_android_file_nll(p)
+    basename = p.rstrip("/").rsplit("/", 1)[-1] if p else ""
+    family = _refined_package_family(p)
+
+    if actual_label == "android_app_cache_file":
+        if "/cache2/entries/" in p:
+            return f"{family}_cache2_entries_hexblob"
+        if "/cache2/doomed/" in p:
+            return f"{family}_cache2_doomed_num"
+        if "safebrowsing" in p:
+            return f"{family}_safebrowsing_cache"
+        if "image_manager_disk_cache" in p:
+            shape = _stable_shape_token(basename)
+            return f"{family}_image_manager_disk_cache_{shape}"
+        return f"{family}_cache" if family != "app" else "app_cache"
+
+    if actual_label == "android_app_private_file":
+        if "/files/body/" in p:
+            if basename.endswith(".txt"):
+                return f"{family}_body_txt"
+            if basename.endswith(".html"):
+                return f"{family}_body_html"
+            return f"{family}_body"
+        if "/app_webview/" in p or p.rstrip("/").endswith("/app_webview"):
+            return f"{family}_app_webview"
+        if "/databases/" in p or p.rstrip("/").endswith("/databases"):
+            return f"{family}_databases"
+        if "/shared_prefs/" in p or p.rstrip("/").endswith("/shared_prefs"):
+            return f"{family}_shared_prefs"
+        if "/shared_files/" in p or p.rstrip("/").endswith("/shared_files"):
+            return f"{family}_shared_files"
+        if "/files/mozilla/" in p or re.search(r"/data/data/[^/]+/mozilla/", p):
+            return f"{family}_mozilla_profile"
+        match = re.match(r"^/data/data/[^/]+/([^/]+)", p)
+        subdir = normalize_refined_token(match.group(1), max_len=40) if match else "app_private"
+        return f"{family}_{subdir}"
+
+    if actual_label == "android_apk_file":
+        if re.match(r"^/data/app/vmdl[0-9]+\.tmp/base\.apk$", p):
+            return "data_app_vmdl_base_apk"
+        package = _package_name_from_path(p)
+        if package:
+            family_from_package = _refined_package_family_from_package(package)
+            return f"data_app_pkg_{family_from_package}_base_apk"
+        if p.startswith(("/tmp/", "/data/local/tmp/")):
+            return f"tmp_apk_{_stable_shape_token(basename)}"
+
+    if actual_label == "android_app_install_file":
+        if re.search(r"/vmdl[0-9]+\.tmp/lib/?$", p):
+            return "data_app_vmdl_lib"
+        if re.search(r"/vmdl[0-9]+\.tmp", p):
+            return "data_app_vmdl_tmp"
+        package = _package_name_from_path(p)
+        if package:
+            family_from_package = _refined_package_family_from_package(package)
+            return f"data_app_pkg_{family_from_package}_install"
+        return "data_app_install"
+
+    return android_file_detail_refined(path, actual_label)
+
+
+def clearscope_file_natural_tokens_v3(path: object) -> tuple[str, ...]:
+    """Return v3 natural ClearScope file residual tokens."""
+    label = classify_android_file_nll(path)
+    return ("file", label, android_file_detail_v3(path, label))
+
+
+def android_file_detail_v31(path: object, label: str | None = None) -> str:
+    """Return the v3.1 ClearScope Android file detail token."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    actual_label = label or classify_android_file_nll(p)
+    basename = p.rstrip("/").rsplit("/", 1)[-1] if p else ""
+    family = _refined_package_family(p)
+
+    if actual_label == "android_app_cache_file" and "/cache2/entries/" in p:
+        if re.fullmatch(r"[0-9a-f]{40}", basename, flags=re.IGNORECASE):
+            return f"{family}_cache2_entries_hex40_body"
+        if re.fullmatch(r"[0-9a-f]{40}\.tc-md", basename, flags=re.IGNORECASE):
+            return f"{family}_cache2_entries_hex40_tc_md"
+        if re.fullmatch(r"[0-9a-f]{32}", basename, flags=re.IGNORECASE):
+            return f"{family}_cache2_entries_hex32_body"
+        if re.fullmatch(r"[0-9a-f]{32}\.tc-md", basename, flags=re.IGNORECASE):
+            return f"{family}_cache2_entries_hex32_tc_md"
+    return android_file_detail_v3(path, actual_label)
+
+
+def clearscope_file_natural_tokens_v31(path: object) -> tuple[str, ...]:
+    """Return v3.1 natural ClearScope file residual tokens."""
+    label = classify_android_file_nll(path)
+    return ("file", label, android_file_detail_v31(path, label))
+
+
+def _sdcardfs_package(path: str) -> str:
+    match = re.fullmatch(r"/config/sdcardfs/([^/]+)(?:/appid)?", path)
+    return match.group(1) if match else ""
+
+
+def _sdcardfs_detail(path: str, suffix: str = "") -> str:
+    package = _sdcardfs_package(path)
+    family = _refined_package_family_from_package(package)
+    return normalize_refined_token("_".join(part for part in (family, suffix) if part))
+
+
+def classify_android_file_nll_v33_e5_android_safe(path: object) -> str:
+    """Return the v33 E5-safe ClearScope Android file coarse label."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    if re.fullmatch(r"/config/sdcardfs/[^/]+/appid", p):
+        return "android_sdcardfs_appid"
+    if re.fullmatch(r"/config/sdcardfs/[^/]+", p):
+        return "android_sdcardfs_package"
+    return classify_android_file_nll(path)
+
+
+def _device_detail_v33_e5_android_safe(path: str) -> str:
+    basename = normalize_refined_token(path.rstrip("/").rsplit("/", 1)[-1], max_len=40)
+    if basename in {
+        "pmsg0",
+        "ashmem",
+        "ion",
+        "binder",
+        "hwbinder",
+        "vndbinder",
+        "null",
+        "zero",
+    }:
+        return f"dev_{basename}"
+    return _device_detail_refined(path)
+
+
+def android_file_detail_v33_e5_android_safe(
+    path: object,
+    label: str | None = None,
+) -> str:
+    """Return the v33 E5-safe ClearScope Android file detail token."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    actual_label = label or classify_android_file_nll_v33_e5_android_safe(p)
+    if actual_label == "android_sdcardfs_appid":
+        return _sdcardfs_detail(p, "appid")
+    if actual_label == "android_sdcardfs_package":
+        return _sdcardfs_detail(p)
+    if actual_label == "android_device_file":
+        return _device_detail_v33_e5_android_safe(p)
+    return android_file_detail_v31(path, actual_label)
+
+
+def clearscope_file_natural_tokens_v33_e5_android_safe(path: object) -> tuple[str, ...]:
+    """Return v33 E5-safe natural ClearScope file tokens."""
+    label = classify_android_file_nll_v33_e5_android_safe(path)
+    return ("file", label, android_file_detail_v33_e5_android_safe(path, label))
+
+
+def _cache2_entries_profile_shape(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    try:
+        cache_index = parts.index("cache")
+        profile = parts[cache_index + 1]
+    except (ValueError, IndexError):
+        return "profile_other"
+    if profile.endswith(".default"):
+        return "profile_default"
+    return "profile_other"
+
+
+def android_file_detail_v32(path: object, label: str | None = None) -> str:
+    """Return the v3.2 ClearScope Android file detail token."""
+    raw = str(path or "").strip()
+    p = raw.lower()
+    actual_label = label or classify_android_file_nll(p)
+    basename = p.rstrip("/").rsplit("/", 1)[-1] if p else ""
+    family = _refined_package_family(p)
+
+    if actual_label == "android_app_cache_file" and "/cache2/entries/" in p:
+        if re.fullmatch(r"[0-9a-f]{40}", basename, flags=re.IGNORECASE):
+            profile_shape = _cache2_entries_profile_shape(p)
+            return f"{family}_cache2_entries_{profile_shape}_hex40"
+        return f"{family}_cache2_entries_nonhex_or_other"
+    return android_file_detail_v31(path, actual_label)
+
+
+def clearscope_file_natural_tokens_v32(path: object) -> tuple[str, ...]:
+    """Return v3.2 natural ClearScope file residual tokens."""
+    label = classify_android_file_nll(path)
+    return ("file", label, android_file_detail_v32(path, label))
+
+
+def android_file_detail_v32_cache_only(path: object, label: str | None = None) -> str:
+    """Return the v3.2 cache-only ClearScope Android file detail token."""
+    return android_file_detail_v32(path, label)
+
+
+def clearscope_file_natural_tokens_v32_cache_only(path: object) -> tuple[str, ...]:
+    """Return v3.2 cache-only natural ClearScope file residual tokens."""
+    label = classify_android_file_nll(path)
+    return ("file", label, android_file_detail_v32_cache_only(path, label))
+
+
 def clearscope_netflow_nll_role() -> str:
     """Return the fixed ClearScope netflow NLL role."""
     return "net|android|netflow"
@@ -540,6 +781,104 @@ def clearscope_residual_text_refined(
             keep_netflow_src_detail_for_audit=keep_netflow_src_detail_for_audit,
         ),
     )
+
+
+def clearscope_residual_tokens_v3(row: dict[str, object]) -> tuple[str, ...]:
+    """Return v3 ClearScope residual sentence tokens for one event row."""
+    action = _refined_action_token(row.get("action", "unknown"))
+    tokens = [
+        *_clearscope_v3_node_tokens(row, "src"),
+        "event",
+        action,
+        *_clearscope_v3_node_tokens(row, "dst"),
+    ]
+    return tuple(str(token) for token in tokens if str(token).strip())
+
+
+def clearscope_residual_text_v3(row: dict[str, object]) -> str:
+    """Return v3 ClearScope residual sentence text for one event row."""
+    return " ".join(clearscope_residual_tokens_v3(row))
+
+
+def clearscope_residual_tokens_v31(row: dict[str, object]) -> tuple[str, ...]:
+    """Return v3.1 ClearScope residual sentence tokens for one event row."""
+    action = _refined_action_token(row.get("action", "unknown"))
+    tokens = [
+        *_clearscope_v31_node_tokens(row, "src"),
+        "event",
+        action,
+        *_clearscope_v31_node_tokens(row, "dst"),
+    ]
+    return tuple(str(token) for token in tokens if str(token).strip())
+
+
+def clearscope_residual_text_v31(row: dict[str, object]) -> str:
+    """Return v3.1 ClearScope residual sentence text."""
+    return " ".join(clearscope_residual_tokens_v31(row))
+
+
+def _clearscope_v32_socket_context_tokens(row: dict[str, object]) -> tuple[str, ...]:
+    action = _refined_action_token(row.get("action", "unknown"))
+    src_kind = normalize_refined_token(row.get("src_kind", ""), max_len=30)
+    dst_kind = normalize_refined_token(row.get("dst_kind", ""), max_len=30)
+    src_path = str(row.get("src_file_path", "") or "").strip().lower()
+    dst_path = str(row.get("dst_file_path", "") or "").strip().lower()
+    if (
+        action == "event_read"
+        and src_kind == "file"
+        and dst_kind == "process"
+        and src_path == "/dev/socket/dnsproxyd"
+    ):
+        _label, detail = android_process_natural_tokens_refined(
+            row.get("dst_process_cmd", ""),
+        )[1:]
+        return (f"event_socket_dnsproxyd_to_{detail}",)
+    if (
+        action == "event_read"
+        and src_kind == "process"
+        and dst_kind == "file"
+        and dst_path == "/dev/socket/dnsproxyd"
+    ):
+        _label, detail = android_process_natural_tokens_refined(
+            row.get("src_process_cmd", ""),
+        )[1:]
+        return (f"event_socket_dnsproxyd_from_{detail}",)
+    return ()
+
+
+def clearscope_residual_tokens_v32(row: dict[str, object]) -> tuple[str, ...]:
+    """Return v3.2 ClearScope residual sentence tokens for one event row."""
+    action = _refined_action_token(row.get("action", "unknown"))
+    tokens = [
+        *_clearscope_v32_node_tokens(row, "src"),
+        "event",
+        action,
+        *_clearscope_v32_node_tokens(row, "dst"),
+        *_clearscope_v32_socket_context_tokens(row),
+    ]
+    return tuple(str(token) for token in tokens if str(token).strip())
+
+
+def clearscope_residual_text_v32(row: dict[str, object]) -> str:
+    """Return v3.2 ClearScope residual sentence text."""
+    return " ".join(clearscope_residual_tokens_v32(row))
+
+
+def clearscope_residual_tokens_v32_cache_only(row: dict[str, object]) -> tuple[str, ...]:
+    """Return v3.2 cache-only ClearScope residual tokens without socket context."""
+    action = _refined_action_token(row.get("action", "unknown"))
+    tokens = [
+        *_clearscope_v32_node_tokens(row, "src"),
+        "event",
+        action,
+        *_clearscope_v32_node_tokens(row, "dst"),
+    ]
+    return tuple(str(token) for token in tokens if str(token).strip())
+
+
+def clearscope_residual_text_v32_cache_only(row: dict[str, object]) -> str:
+    """Return v3.2 cache-only ClearScope residual sentence text."""
+    return " ".join(clearscope_residual_tokens_v32_cache_only(row))
 
 
 def _proc_detail(path: str) -> str:
@@ -618,6 +957,21 @@ def _socket_detail_refined(path: str) -> str:
     if basename in known:
         return f"socket_{basename}"
     return "socket_other"
+
+
+def _stable_shape_token(value: object) -> str:
+    text = str(value or "").strip().lower()
+    basename = text.rstrip("/").rsplit("/", 1)[-1]
+    if HEX_BLOB_RE.fullmatch(basename):
+        return "hexblob"
+    if NUMERIC_ID_RE.fullmatch(basename):
+        return "num"
+    if MIXED_ID_RE.fullmatch(basename):
+        return "mixedid"
+    if "." in basename:
+        ext = basename.rsplit(".", 1)[-1]
+        return normalize_refined_token(ext, max_len=30)
+    return normalize_refined_token(basename, max_len=60)
 
 
 def _apk_detail_refined(path: str) -> str:
@@ -741,6 +1095,39 @@ def _clearscope_refined_node_tokens(
             dst_addr=row.get(f"{side}_addr", row.get("dst_addr", "")),
             keep_src_detail_for_audit=keep_netflow_src_detail_for_audit,
         )
+    return (kind or "unknown",)
+
+
+def _clearscope_v3_node_tokens(row: dict[str, object], side: str) -> tuple[str, ...]:
+    kind = normalize_refined_token(row.get(f"{side}_kind", ""), max_len=30)
+    if kind == "process":
+        return android_process_natural_tokens_refined(row.get(f"{side}_process_cmd", ""))
+    if kind == "file":
+        return clearscope_file_natural_tokens_v3(row.get(f"{side}_file_path", ""))
+    if kind == "netflow":
+        return clearscope_netflow_natural_tokens_refined()
+    return (kind or "unknown",)
+
+
+def _clearscope_v31_node_tokens(row: dict[str, object], side: str) -> tuple[str, ...]:
+    kind = normalize_refined_token(row.get(f"{side}_kind", ""), max_len=30)
+    if kind == "process":
+        return android_process_natural_tokens_refined(row.get(f"{side}_process_cmd", ""))
+    if kind == "file":
+        return clearscope_file_natural_tokens_v31(row.get(f"{side}_file_path", ""))
+    if kind == "netflow":
+        return clearscope_netflow_natural_tokens_refined()
+    return (kind or "unknown",)
+
+
+def _clearscope_v32_node_tokens(row: dict[str, object], side: str) -> tuple[str, ...]:
+    kind = normalize_refined_token(row.get(f"{side}_kind", ""), max_len=30)
+    if kind == "process":
+        return android_process_natural_tokens_refined(row.get(f"{side}_process_cmd", ""))
+    if kind == "file":
+        return clearscope_file_natural_tokens_v32(row.get(f"{side}_file_path", ""))
+    if kind == "netflow":
+        return clearscope_netflow_natural_tokens_refined()
     return (kind or "unknown",)
 
 
