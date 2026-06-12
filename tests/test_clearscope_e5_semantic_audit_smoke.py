@@ -120,6 +120,60 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
         self.assertEqual(diagnostics["malicious_fallback_counts"], {})
         self.assertIn("label_aware_diagnostic_only", diagnostics["warning"])
 
+    def test_tokenize_file_row_uses_v31_semantics(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 10,
+                "node_uuid": "file-node",
+                "node_type": "file",
+                "path": "/data/local/tmp/tester",
+            },
+            semantic_mode="raw_detail_v31_discriminative",
+        )
+
+        self.assertEqual(node.node_type, "file")
+        self.assertEqual(node.semantic_tokens[0], "file")
+        self.assertIn("android_tmp_file", node.semantic_tokens)
+
+    def test_tokenize_subject_row_uses_cmd_when_present(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 11,
+                "node_uuid": "subject-node",
+                "node_type": "subject",
+                "path": "/system/bin/toybox",
+                "cmd": "com.android.providers.contacts",
+            },
+            semantic_mode="raw_detail_v31_discriminative",
+        )
+
+        self.assertEqual(node.node_type, "subject")
+        self.assertEqual(node.semantic_tokens[0], "process")
+        self.assertIn("providers", node.semantic_tokens)
+
+    def test_tokenize_netflow_row_keeps_fixed_clear_scope_netflow(self) -> None:
+        from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
+
+        node = tokenize_node_row(
+            {
+                "index_id": 12,
+                "node_uuid": "netflow-node",
+                "node_type": "netflow",
+                "src_addr": "10.0.0.1",
+                "src_port": "123",
+                "dst_addr": "10.0.0.2",
+                "dst_port": "443",
+            },
+            semantic_mode="raw_detail_v31_discriminative",
+        )
+
+        self.assertEqual(node.node_type, "netflow")
+        self.assertIn("netflow", node.semantic_tokens)
+
 
 if __name__ == "__main__":
     unittest.main()

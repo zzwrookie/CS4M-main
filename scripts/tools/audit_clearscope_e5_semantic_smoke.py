@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import csv
+import json
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable
+
+import psycopg2
+
+from cs4m.semantics.clearscope_android import (
+    android_process_natural_tokens_refined,
+    clearscope_file_natural_tokens_v31,
+    clearscope_netflow_natural_tokens_refined,
+)
 
 
 E5_SPLITS = {
@@ -45,6 +58,54 @@ def extract_detail_token(node: AuditNode) -> str:
     if not node.semantic_tokens:
         return "unknown"
     return str(node.semantic_tokens[-1])
+
+
+def _row_text(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def tokenize_node_row(row: dict[str, Any], semantic_mode: str) -> AuditNode:
+    """Tokenize one ClearScope E5 node row with the requested semantic mode."""
+    node_type = str(row.get("node_type", "")).strip().lower()
+    if semantic_mode != "raw_detail_v31_discriminative":
+        raise ValueError(f"unsupported E5 audit semantic mode: {semantic_mode}")
+    if node_type == "file":
+        raw_detail = _row_text(row, "path")
+        tokens = clearscope_file_natural_tokens_v31(raw_detail)
+    elif node_type == "subject":
+        raw_detail = _row_text(row, "cmd", "path")
+        tokens = android_process_natural_tokens_refined(raw_detail)
+    elif node_type == "netflow":
+        raw_detail = (
+            f"{_row_text(row, 'src_addr')}:{_row_text(row, 'src_port')}"
+            f"->{_row_text(row, 'dst_addr')}:{_row_text(row, 'dst_port')}"
+        )
+        tokens = clearscope_netflow_natural_tokens_refined()
+    else:
+        raw_detail = ""
+        tokens = ("unknown", "unknown", "unknown")
+    return AuditNode(
+        index_id=int(row["index_id"]),
+        node_uuid=str(row.get("node_uuid", "")),
+        node_type=node_type,
+        raw_detail=raw_detail,
+        semantic_tokens=tuple(str(token) for token in tokens),
+    )
+
+
+def connect_db(database: str):
+    """Connect to local PostgreSQL using CLAD_DB_* environment variables."""
+    return psycopg2.connect(
+        host=os.getenv("CLAD_DB_HOST", "localhost"),
+        port=int(os.getenv("CLAD_DB_PORT", "5433")),
+        user=os.getenv("CLAD_DB_USER", "postgres"),
+        password=os.getenv("CLAD_DB_PASSWORD", ""),
+        dbname=database,
+    )
 
 
 def collect_fallback_counts(nodes: Iterable[AuditNode]) -> dict[str, int]:
