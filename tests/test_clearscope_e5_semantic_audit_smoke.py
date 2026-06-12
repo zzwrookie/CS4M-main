@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 import subprocess
@@ -278,13 +279,80 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
                 "src_index_id": 1,
                 "dst_index_id": 3,
             },
+            {
+                "split": "val",
+                "operation": "EVENT_WRITE",
+                "src_index_id": 1,
+                "dst_index_id": 3,
+            },
+            {
+                "split": "val",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 2,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_READ",
+                "src_index_id": 999,
+                "dst_index_id": 2,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_READ",
+                "src_index_id": 1,
+                "dst_index_id": 999,
+            },
+            {
+                "split": "test",
+                "operation": "EVENT_READ",
+                "src_index_id": 999,
+                "dst_index_id": 998,
+            },
         ]
 
         summary = build_event_tuple_summary(events, nodes)
 
-        self.assertEqual(summary["event_count"], 3)
+        self.assertEqual(summary["input_event_count"], 8)
+        self.assertEqual(summary["event_count"], 5)
+        self.assertEqual(summary["skipped_event_count"], 3)
+        self.assertEqual(summary["skipped_missing_src_count"], 2)
+        self.assertEqual(summary["skipped_missing_dst_count"], 2)
+        self.assertEqual(summary["val_tuple_count"], 2)
+        self.assertEqual(summary["val_oov_tuple_count"], 1)
+        self.assertEqual(summary["val_seen_tuple_count"], 1)
         self.assertEqual(summary["test_oov_tuple_count"], 1)
         self.assertEqual(summary["test_seen_tuple_count"], 1)
+        self.assertEqual(
+            summary["top_test_oov_tuples"],
+            [
+                {
+                    "tuple": [
+                        "EVENT_WRITE",
+                        "subject",
+                        "file",
+                        "toybox",
+                        "tmp_file",
+                    ],
+                    "count": 1,
+                }
+            ],
+        )
+        self.assertEqual(
+            summary["top_val_oov_tuples"],
+            [
+                {
+                    "tuple": [
+                        "EVENT_WRITE",
+                        "subject",
+                        "file",
+                        "toybox",
+                        "tmp_file",
+                    ],
+                    "count": 1,
+                }
+            ],
+        )
 
     def test_write_reports_creates_json_and_csv(self) -> None:
         from tempfile import TemporaryDirectory
@@ -299,7 +367,13 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
                     "warning": "label_aware_diagnostic_only_not_runtime_policy"
                 },
                 fallback_rows=[{"token": "netflow", "count": 1}],
-                collision_rows=[{"token": "tmp_file", "raw_detail_count": 2}],
+                collision_rows=[
+                    {
+                        "token": "tmp_file",
+                        "raw_detail_count": 2,
+                        "examples": ["/data/local/tmp/a", "/data/local/tmp/b"],
+                    }
+                ],
             )
 
             self.assertTrue(paths["label_free_json"].endswith("label_free_summary.json"))
@@ -324,6 +398,13 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
 
             collision_csv = Path(paths["collision_csv"]).read_text()
             self.assertIn("tmp_file", collision_csv)
+            collision_rows = list(
+                csv.DictReader(Path(paths["collision_csv"]).read_text().splitlines())
+            )
+            self.assertEqual(
+                json.loads(collision_rows[0]["examples"]),
+                ["/data/local/tmp/a", "/data/local/tmp/b"],
+            )
 
 
 if __name__ == "__main__":

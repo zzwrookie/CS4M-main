@@ -184,16 +184,35 @@ def build_event_tuple_summary(
     events: Iterable[dict[str, Any]],
     nodes_by_index: dict[int, AuditNode],
 ) -> dict[str, object]:
-    """Summarize label-free event tuple support and test OOV."""
+    """Summarize label-free event tuple support and held-out OOV."""
+    input_event_count = 0
     event_count = 0
+    skipped_event_count = 0
+    skipped_missing_src_count = 0
+    skipped_missing_dst_count = 0
     train_tuples: Counter[tuple[str, ...]] = Counter()
+    val_tuples: Counter[tuple[str, ...]] = Counter()
     test_tuples: Counter[tuple[str, ...]] = Counter()
     split_counts: Counter[str] = Counter()
     operation_counts: Counter[str] = Counter()
     for event in events:
-        tuple_key = _event_tuple(event, nodes_by_index)
-        if tuple_key is None:
+        input_event_count += 1
+        src = nodes_by_index.get(int(event["src_index_id"]))
+        dst = nodes_by_index.get(int(event["dst_index_id"]))
+        if src is None or dst is None:
+            skipped_event_count += 1
+            if src is None:
+                skipped_missing_src_count += 1
+            if dst is None:
+                skipped_missing_dst_count += 1
             continue
+        tuple_key = (
+            str(event["operation"]),
+            src.node_type,
+            dst.node_type,
+            extract_detail_token(src),
+            extract_detail_token(dst),
+        )
         event_count += 1
         split = str(event["split"])
         operation = str(event["operation"])
@@ -201,8 +220,20 @@ def build_event_tuple_summary(
         operation_counts[operation] += 1
         if split == "train":
             train_tuples[tuple_key] += 1
+        elif split == "val":
+            val_tuples[tuple_key] += 1
         elif split == "test":
             test_tuples[tuple_key] += 1
+    val_oov = {
+        tuple_key: count
+        for tuple_key, count in val_tuples.items()
+        if tuple_key not in train_tuples
+    }
+    val_seen = {
+        tuple_key: count
+        for tuple_key, count in val_tuples.items()
+        if tuple_key in train_tuples
+    }
     test_oov = {
         tuple_key: count
         for tuple_key, count in test_tuples.items()
@@ -214,13 +245,24 @@ def build_event_tuple_summary(
         if tuple_key in train_tuples
     }
     return {
+        "input_event_count": input_event_count,
         "event_count": event_count,
+        "skipped_event_count": skipped_event_count,
+        "skipped_missing_src_count": skipped_missing_src_count,
+        "skipped_missing_dst_count": skipped_missing_dst_count,
         "split_counts": dict(sorted(split_counts.items())),
         "operation_counts": dict(sorted(operation_counts.items())),
         "train_tuple_count": len(train_tuples),
+        "val_tuple_count": len(val_tuples),
+        "val_oov_tuple_count": len(val_oov),
+        "val_seen_tuple_count": len(val_seen),
         "test_tuple_count": len(test_tuples),
         "test_oov_tuple_count": len(test_oov),
         "test_seen_tuple_count": len(test_seen),
+        "top_val_oov_tuples": [
+            {"tuple": list(tuple_key), "count": count}
+            for tuple_key, count in Counter(val_oov).most_common(50)
+        ],
         "top_test_oov_tuples": [
             {"tuple": list(tuple_key), "count": count}
             for tuple_key, count in Counter(test_oov).most_common(50)
@@ -269,10 +311,22 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     if not fieldnames:
         fieldnames = ["empty"]
         rows = [{"empty": ""}]
+    normalized_rows = []
+    for row in rows:
+        normalized_rows.append(
+            {
+                key: (
+                    json.dumps(value, sort_keys=True)
+                    if isinstance(value, (dict, list))
+                    else value
+                )
+                for key, value in row.items()
+            }
+        )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(normalized_rows)
 
 
 def write_reports(
