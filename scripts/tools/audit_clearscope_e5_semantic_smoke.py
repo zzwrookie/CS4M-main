@@ -180,7 +180,7 @@ def build_label_aware_diagnostics(
         "malicious_node_count": len(malicious),
         "malicious_fallback_counts": fallback_counts,
         "malicious_detail_collision_groups": {
-            token: sorted(raw_values)
+            token: sorted({_display_raw_detail(raw_value) for raw_value in raw_values})
             for token, raw_values in sorted(collision_groups.items())
             if len(raw_values) > 1
         },

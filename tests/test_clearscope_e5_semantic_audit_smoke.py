@@ -163,6 +163,31 @@ class ClearScopeE5SemanticAuditSmokeTests(unittest.TestCase):
         self.assertEqual(diagnostics["malicious_fallback_counts"], {})
         self.assertIn("label_aware_diagnostic_only", diagnostics["warning"])
 
+    def test_label_aware_diagnostics_sanitize_accounting_collision_examples(self) -> None:
+        nodes = [
+            AuditNode(
+                1,
+                "acct-a",
+                "file",
+                "/acct/uid_0/pid_549",
+                ("file", "android_accounting_pid", "acct_pid"),
+            ),
+            AuditNode(
+                2,
+                "acct-b",
+                "file",
+                "/acct/uid_1000/pid_12345",
+                ("file", "android_accounting_pid", "acct_pid"),
+            ),
+        ]
+
+        diagnostics = build_label_aware_diagnostics(nodes, malicious_index_ids={1, 2})
+
+        self.assertEqual(
+            diagnostics["malicious_detail_collision_groups"],
+            {"acct_pid": ["/acct/uid_<uid>/pid_<pid>"]},
+        )
+
     def test_tokenize_file_row_uses_v31_semantics(self) -> None:
         from scripts.tools.audit_clearscope_e5_semantic_smoke import tokenize_node_row
 
