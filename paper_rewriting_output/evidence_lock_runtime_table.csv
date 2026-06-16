@@ -1,0 +1,7 @@
+dataset,selected_source,selection_reason,event_tp_fp,node_tp_fp,online_primary_rss_mb,speed_events_s,speed_source,status
+THEIA_E3,THEIA_E3_PHASE3E_E4_NONE,current best,152075 / 15311,54 / 28692,154.21,3450.39,deploy/test scoring,locked_user_provided
+CADETS_E3,CADETS_E3_PHASE3E_E4_NONE,best node top-k TP,2397 / 8992,53 / 6050,89.92,3897.52,recorded E4 deploy/test scoring,locked_user_provided
+CLEARSCOPE_E3,V31...FP_GUARD_V2_AGGRESSIVE,best full-pool FP among 40 TP,413 / 9028,40 / 3297,73.94,3543.37,online minimal,locked_user_provided
+CLEARSCOPE_E5,V33B_DUAL_CHANNEL_NODE_SUPPORT_FULL audit,dual-channel union,15 / 394,14 / 377,103.95,3363.85,online minimal,needs_recompute_51_gt_source_conflict_for_topk
+THEIA_E5,theia_v5c0_plus_policy provided,provided result,11 / 1300,10 / 751,152.93,6291.01 / 6481.20,log / profiling,locked_user_provided
+OPTC_051,OPTC_051_OPTC_WINDOWS_V1_3C_DETAIL_FULL_INFER,current generated Windows result,208 / 1158,17 / 377,see_metric_provenance,see_metric_provenance,result artifacts,locked_canonical_event_eval_node_topk

@@ -1,0 +1,32 @@
+{
+    "workflow": "rewrite_existing",
+    "scene": "conference",
+    "tier": "pro",
+    "output_language": "en",
+    "target_name": "USENIX Security 2027",
+    "materials_dir": ".",
+    "draft_path": "docs/CS4M_UsenixSecurity.tex",
+    "user_motivation": "Existing provenance-based intrusion detection systems are often real-time in log collection, but not real-time in alert semantics. They typically require graph construction, window completion, batching, pruning, segmentation, or periodic inference before an alert can be raised. CS4M targets a stricter deployment model: every provenance event is scored as it arrives, before the event updates detector state, and the system emits immediately explainable alert evidence without materializing a full provenance graph.",
+    "official_urls": [
+        "https://www.usenix.org/conference/usenixsecurity26/call-for-papers"
+    ],
+    "special_requirements": [
+        "Do not modify docs/CS4M_UsenixSecurity.tex during the spec stage.",
+        "Use only project evidence from docs, outputs, scripts, tests, and reproduction manifests.",
+        "Do not fabricate metrics, datasets, p-values, citations, figures, or experimental claims.",
+        "Treat ground truth only as post-stream evaluation or audit evidence.",
+        "Frame CS4M as event-arrival true online PIDS, not as a generic graph-learning improvement.",
+        "Critique pseudo-real-time PIDS designs by their computational path and alerting unit, not by dismissive language."
+    ],
+    "word_output": "none",
+    "translation_package": "none",
+    "reference_mode": "local_first",
+    "reference_paths": [
+        "docs",
+        "outputs/diagnostics",
+        "outputs/results",
+        "scripts",
+        "tests"
+    ],
+    "citation_target_count": 10
+}

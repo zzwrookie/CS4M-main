@@ -1,0 +1,2 @@
+dataset,original_gt_hit,unique_compact_gt_hit,netflow_gt_hit,process_gt_hit,file_gt_hit,event_tp_fp,total_alerts,source,status
+OPTC_051,66/114,19/67,49/49,15/59,2/6,208 / 1158,1366,outputs/diagnostics/optc_windows_v13c_canonical_eval_audit_20260615_224932/summary.json,locked_post_stream_canonical_eval
