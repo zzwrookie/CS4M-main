@@ -226,6 +226,65 @@ DATASET_DEFAULT_CONFIG = {
             ["E3-CLEARSCOPE/node_clearscope_e3_firefox_0411.csv", "2018-04-11 13:54:00", "2018-04-11 14:48:00"],
         ],
     },
+
+    "OPTC_201": {
+        "raw_dir": "",
+        "db_name": "optc_201",
+        "db_name_all": "optc_201",
+        "num_node_types": 3,
+        "num_edge_types": 10,
+        "year_month": "2019-09",
+        "day_range": (15, 26),
+        "train_splits": ["day_19", "day_20", "day_21"],
+        "val_splits": ["day_22"],
+        "test_splits": ["day_23", "day_24", "day_25"],
+        "unused_splits": ["day_16", "day_17", "day_18"],
+        "ground_truth_paths": [
+            "h201/node_h201_0923.csv",
+        ],
+        "attack_windows": [
+            ["h201/node_h201_0923.csv", "2019-09-23 11:23:00", "2019-09-23 13:25:00"],
+        ],
+    },
+    "OPTC_501": {
+        "raw_dir": "",
+        "db_name": "optc_501",
+        "db_name_all": "optc_501",
+        "num_node_types": 3,
+        "num_edge_types": 10,
+        "year_month": "2019-09",
+        "day_range": (15, 26),
+        "train_splits": ["day_19", "day_20", "day_21"],
+        "val_splits": ["day_22"],
+        "test_splits": ["day_23", "day_24", "day_25"],
+        "unused_splits": ["day_16", "day_17", "day_18"],
+        "ground_truth_paths": [
+            "h501/node_h501_0924.csv",
+        ],
+        "attack_windows": [
+            ["h501/node_h501_0924.csv", "2019-09-24 10:28:00", "2019-09-24 15:29:00"],
+        ],
+    },
+    "OPTC_051": {
+        "raw_dir": "",
+        "db_name": "optc_051",
+        "db_name_all": "optc_051",
+        "num_node_types": 3,
+        "num_edge_types": 10,
+        "year_month": "2019-09",
+        "day_range": (15, 26),
+        "train_splits": ["day_19", "day_20", "day_21"],
+        "val_splits": ["day_22"],
+        "test_splits": ["day_23", "day_24", "day_25"],
+        "unused_splits": ["day_16", "day_17", "day_18"],
+        "ground_truth_paths": [
+            "h051/node_h051_0925.csv",
+        ],
+        "attack_windows": [
+            ["h051/node_h051_0925.csv", "2019-09-25 10:29:00", "2019-09-25 14:25:00"],
+        ],
+    },
+
 }
 
 

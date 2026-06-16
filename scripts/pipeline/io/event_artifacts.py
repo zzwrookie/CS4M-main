@@ -2,6 +2,29 @@
 
 from __future__ import annotations
 
+import csv
+
+from cs4m.semantics.optc_windows import (
+    OPTC_NETFLOW_CANONICALIZATION_V1_3,
+    OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE,
+    is_optc_dataset,
+    optc_file_natural_tokens_v1,
+    optc_netflow_canonical_id_v1_3,
+    optc_netflow_canonical_key_v1_3,
+    optc_netflow_natural_tokens_v1,
+    optc_netflow_natural_tokens_v1_3,
+    optc_process_natural_tokens_v1,
+    optc_process_natural_tokens_v1_3,
+    optc_process_natural_tokens_v1_3b,
+    optc_process_natural_tokens_v1_3c,
+)
 from scripts.pipeline.config.runtime_config import *
 
 
@@ -15,6 +38,28 @@ def _phase3e_entity_type_name(field_name: str, type_id: int) -> str:
     if int(type_id) not in ENTITY_TYPE_NAMES:
         raise ValueError(f"invalid {field_name}: {int(type_id)}")
     return ENTITY_TYPE_NAMES[int(type_id)]
+
+
+def _phase3e_optc_canonical_node_id(
+    node_id: int,
+    node_kind: object,
+    node_maps: Mapping[str, Any],
+    canonicalization: object,
+) -> int:
+    """Return the optional OpTC netflow canonical id for one node."""
+    mode = str(canonicalization)
+    if mode != OPTC_NETFLOW_CANONICALIZATION_V1_3:
+        return int(node_id)
+    if normalize_piece(node_kind) != "netflow":
+        return int(node_id)
+    meta = dict(node_maps.get("netflow_meta", {}).get(int(node_id), {}))
+    key = optc_netflow_canonical_key_v1_3(
+        src_addr=meta.get("src_addr", ""),
+        src_port=meta.get("src_port", ""),
+        dst_addr=meta.get("dst_addr", ""),
+        dst_port=meta.get("dst_port", ""),
+    )
+    return int(optc_netflow_canonical_id_v1_3(key))
 
 
 def _phase3e_event_index_array(event_index: np.ndarray) -> np.ndarray:
@@ -134,6 +179,59 @@ def _phase3e_node_tokens_from_db_node(
     kind = normalize_piece(node_kind)
     if kind == "process":
         meta = node_maps.get("process_meta", {}).get(int(node_id), {})
+        if is_optc_dataset(config.dataset):
+            if str(config.semantic_mode) in {
+                OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE,
+            }:
+                return optc_process_natural_tokens_v1(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=True,
+                )
+            if str(config.semantic_mode) in {
+                OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE,
+            }:
+                return optc_process_natural_tokens_v1(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3b(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3b(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3c(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE:
+                return optc_process_natural_tokens_v1_3c(
+                    meta.get("path", ""),
+                    meta.get("cmd", ""),
+                    detail=False,
+                )
         if is_clearscope_dataset(config.dataset):
             if (
                 normalize_clearscope_semantic_mode(config.semantic_mode)
@@ -144,24 +242,114 @@ def _phase3e_node_tokens_from_db_node(
         if is_theia_dataset(config.dataset):
             return linux_process_natural_tokens(meta.get("path", ""), meta.get("cmd", ""))
         if is_cadets_dataset(config.dataset):
+            if cadets_semantic_mode_is_v3_safe_lexical(config.semantic_mode):
+                return freebsd_process_natural_tokens_v3_safe_lexical(meta.get("cmd", ""))
             return freebsd_process_natural_tokens(meta.get("cmd", ""))
     if kind == "file":
         meta = node_maps.get("file_meta", {}).get(int(node_id), {})
+        if is_optc_dataset(config.dataset):
+            if str(config.semantic_mode) in {
+                OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE,
+            }:
+                return optc_file_natural_tokens_v1(meta.get("path", ""), detail=True)
+            if str(config.semantic_mode) in {
+                OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE,
+                OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE,
+            }:
+                return optc_file_natural_tokens_v1(meta.get("path", ""), detail=False)
         if is_clearscope_dataset(config.dataset):
-            if (
-                normalize_clearscope_semantic_mode(config.semantic_mode)
-                != CLEARSCOPE_LEGACY_SEMANTIC_MODE
-            ):
+            clearscope_mode = normalize_clearscope_semantic_mode(config.semantic_mode)
+            if clearscope_mode == CLEARSCOPE_LEGACY_SEMANTIC_MODE:
+                return clearscope_file_natural_tokens(meta.get("path", ""))
+            if clearscope_mode == CLEARSCOPE_REFINED_SEMANTIC_MODE:
                 return clearscope_file_natural_tokens_refined(meta.get("path", ""))
-            return clearscope_file_natural_tokens(meta.get("path", ""))
+            if clearscope_mode == CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE:
+                return clearscope_file_natural_tokens_v32_cache_only(meta.get("path", ""))
+            if clearscope_mode == CLEARSCOPE_V32_SEMANTIC_MODE:
+                return clearscope_file_natural_tokens_v32(meta.get("path", ""))
+            if clearscope_mode == CLEARSCOPE_V31_SEMANTIC_MODE:
+                return clearscope_file_natural_tokens_v31(meta.get("path", ""))
+            return clearscope_file_natural_tokens_v3(meta.get("path", ""))
         if is_theia_dataset(config.dataset):
             return linux_file_natural_tokens(meta.get("path", ""))
         if is_cadets_dataset(config.dataset):
+            if cadets_semantic_mode_is_v3_safe_lexical(config.semantic_mode):
+                return freebsd_file_natural_tokens_v3_safe_lexical(meta.get("path", ""))
             return freebsd_file_natural_tokens(meta.get("path", ""))
     if kind == "netflow":
         meta = node_maps.get("netflow_meta", {}).get(int(node_id), {})
         src_addr = meta.get("src_addr", "")
+        src_port = meta.get("src_port", "")
         dst_addr = meta.get("dst_addr", "")
+        dst_port = meta.get("dst_port", "")
+        if is_optc_dataset(config.dataset):
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=False,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=True,
+                )
+            if str(config.semantic_mode) == OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE:
+                return optc_netflow_natural_tokens_v1_3(
+                    src_addr,
+                    dst_addr,
+                    dst_port,
+                    src_port=src_port,
+                    detail=False,
+                )
         if is_clearscope_dataset(config.dataset):
             if (
                 normalize_clearscope_semantic_mode(config.semantic_mode)
@@ -174,6 +362,8 @@ def _phase3e_node_tokens_from_db_node(
                 return linux_netflow_detail_or_fixed_natural_tokens(dst_addr, src_addr)
             return linux_netflow_natural_tokens(dst_addr, src_addr)
         if is_cadets_dataset(config.dataset):
+            if cadets_semantic_mode_is_v3_safe_lexical(config.semantic_mode):
+                return freebsd_netflow_natural_tokens_v3_safe_lexical(dst_addr, src_addr)
             return freebsd_netflow_natural_tokens(dst_addr, src_addr)
     tokens = split_summary_tokens(node_summary, int(config.max_tokens_per_node))
     return tokens or (kind or "unknown",)
@@ -278,6 +468,129 @@ def _phase3e_fetch_used_node_lookup_batched(
     return indexid2summary, meta_by_kind, float(time.perf_counter() - started)
 
 
+def _phase3e_empty_node_lookup_shape() -> tuple[
+    dict[int, tuple[str, str]],
+    dict[str, dict[int, dict[str, str]]],
+]:
+    """Return the shared empty shape for used-node lookup helpers."""
+    return (
+        {},
+        {
+            "process_meta": {},
+            "file_meta": {},
+            "netflow_meta": {},
+        },
+    )
+
+
+def _phase3e_prepare_temp_used_node_ids(
+    conn: Any,
+    used_node_ids: set[int],
+    insert_page_size: int = 10000,
+) -> None:
+    """Create and populate a session-local used-node id table for join lookup."""
+    sorted_ids = sorted(int(node_id) for node_id in used_node_ids)
+    with conn.cursor() as cur:
+        cur.execute("drop table if exists temp_phase3e_used_node_ids")
+        cur.execute(
+            """
+            create temp table temp_phase3e_used_node_ids (
+                index_id bigint primary key
+            ) on commit drop
+            """,
+        )
+        if not sorted_ids:
+            return
+        rows = [(node_id,) for node_id in sorted_ids]
+        try:
+            from psycopg2.extras import execute_values
+
+            execute_values(
+                cur,
+                "insert into temp_phase3e_used_node_ids (index_id) values %s",
+                rows,
+                page_size=max(int(insert_page_size), 1),
+            )
+        except Exception:
+            cur.executemany(
+                "insert into temp_phase3e_used_node_ids (index_id) values (%s)",
+                rows,
+            )
+
+
+def _phase3e_fetch_used_node_lookup_joined(
+    *,
+    conn: Any,
+    used_node_ids: set[int],
+) -> tuple[dict[int, tuple[str, str]], dict[str, dict[int, dict[str, str]]], float]:
+    """Fetch used process/file/netflow metadata via a temp used-node table join."""
+    if not used_node_ids:
+        indexid2summary, meta_by_kind = _phase3e_empty_node_lookup_shape()
+        return indexid2summary, meta_by_kind, 0.0
+    started = time.perf_counter()
+    indexid2summary, meta_by_kind = _phase3e_empty_node_lookup_shape()
+    _phase3e_prepare_temp_used_node_ids(conn, set(used_node_ids))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            select n.index_id, n.path, n.cmd
+            from {SUBJECT_NODE_TABLE} n
+            join temp_phase3e_used_node_ids u on u.index_id = n.index_id
+            """,
+        )
+        for index_id, path, cmd in cur.fetchall():
+            node_id = int(index_id)
+            path_text = str(path or "")
+            cmd_text = str(cmd or "")
+            indexid2summary[node_id] = ("process", " ".join((path_text, cmd_text)))
+            meta_by_kind["process_meta"][node_id] = {
+                "path": path_text,
+                "cmd": cmd_text,
+            }
+
+        cur.execute(
+            """
+            select n.index_id, n.path
+            from file_node_table n
+            join temp_phase3e_used_node_ids u on u.index_id = n.index_id
+            """,
+        )
+        for index_id, path in cur.fetchall():
+            node_id = int(index_id)
+            path_text = str(path or "")
+            indexid2summary[node_id] = ("file", path_text)
+            meta_by_kind["file_meta"][node_id] = {"path": path_text}
+
+        cur.execute(
+            """
+            select n.index_id, n.src_addr, n.src_port, n.dst_addr, n.dst_port
+            from netflow_node_table n
+            join temp_phase3e_used_node_ids u on u.index_id = n.index_id
+            """,
+        )
+        for index_id, src_addr, src_port, dst_addr, dst_port in cur.fetchall():
+            node_id = int(index_id)
+            values = {
+                "src_addr": str(src_addr or ""),
+                "src_port": str(src_port or ""),
+                "dst_addr": str(dst_addr or ""),
+                "dst_port": str(dst_port or ""),
+            }
+            indexid2summary[node_id] = (
+                "netflow",
+                " ".join(
+                    (
+                        values["src_addr"],
+                        values["src_port"],
+                        values["dst_addr"],
+                        values["dst_port"],
+                    ),
+                ),
+            )
+            meta_by_kind["netflow_meta"][node_id] = values
+    return indexid2summary, meta_by_kind, float(time.perf_counter() - started)
+
+
 def _phase3e_build_node_table_from_used_lookup(
     *,
     used_node_ids: set[int],
@@ -365,6 +678,130 @@ def _phase3e_build_node_table_from_used_lookup(
     return node_table
 
 
+def _phase3e_build_optc_canonical_artifact_inputs(
+    *,
+    used_node_ids: set[int],
+    split_used_nodes: Mapping[str, set[int]],
+    indexid2summary: Mapping[int, tuple[str, str]],
+    meta_by_kind: Mapping[str, Mapping[int, Mapping[str, str]]],
+    config: SlimConfig,
+    process_cfg: ProcessSemanticConfig | None,
+) -> dict[str, Any]:
+    """Build canonical node maps for OpTC netflow identity compression."""
+    node_maps = {
+        "indexid2summary": indexid2summary,
+        "process_meta": meta_by_kind.get("process_meta", {}),
+        "file_meta": meta_by_kind.get("file_meta", {}),
+        "netflow_meta": meta_by_kind.get("netflow_meta", {}),
+    }
+    original_to_canonical: dict[int, int] = {}
+    canonical_kind_by_id: dict[int, str] = {}
+    canonical_tokens_by_id: dict[int, tuple[str, ...]] = {}
+    original_netflow_ids: set[int] = set()
+    canonical_netflow_ids: set[int] = set()
+    canonical_source_count: dict[int, int] = {}
+    progress_interval = max(int(getattr(config, "progress_interval_events", 100000)), 1)
+    started = time.perf_counter()
+    for node_id in sorted(int(value) for value in used_node_ids):
+        if node_id not in indexid2summary:
+            continue
+        node_kind, node_summary = indexid2summary[node_id]
+        kind = normalize_piece(node_kind)
+        canonical_id = _phase3e_optc_canonical_node_id(
+            node_id,
+            kind,
+            node_maps,
+            getattr(config, "optc_netflow_node_canonicalization", "none"),
+        )
+        original_to_canonical[node_id] = int(canonical_id)
+        canonical_kind_by_id.setdefault(int(canonical_id), kind)
+        if int(canonical_id) not in canonical_tokens_by_id:
+            canonical_tokens_by_id[int(canonical_id)] = _phase3e_node_tokens_from_db_node(
+                node_id=node_id,
+                node_kind=kind,
+                node_summary=str(node_summary),
+                node_maps=node_maps,
+                config=config,
+                process_cfg=process_cfg,
+            )
+        canonical_source_count[int(canonical_id)] = canonical_source_count.get(int(canonical_id), 0) + 1
+        if kind == "netflow":
+            original_netflow_ids.add(node_id)
+            canonical_netflow_ids.add(int(canonical_id))
+        if len(original_to_canonical) % progress_interval == 0:
+            _stage_log(
+                config,
+                "phase3e_optc_canonical_inputs_progress",
+                count=len(original_to_canonical),
+                canonical_nodes=len(canonical_tokens_by_id),
+                canonical_netflow_nodes=len(canonical_netflow_ids),
+            )
+    canonical_split_used_nodes: dict[str, set[int]] = {}
+    for split, node_ids in split_used_nodes.items():
+        canonical_split_used_nodes[str(split)] = {
+            int(original_to_canonical.get(int(node_id), int(node_id)))
+            for node_id in set(node_ids)
+            if int(node_id) in original_to_canonical
+        }
+    summary = {
+        "optc_netflow_node_canonicalization": str(
+            getattr(config, "optc_netflow_node_canonicalization", "none"),
+        ),
+        "hybrid_identity_mode": "canonical_state_original_eval",
+        "original_netflow_node_count": int(len(original_netflow_ids)),
+        "canonical_netflow_node_count": int(len(canonical_netflow_ids)),
+        "netflow_compression_ratio": (
+            float(len(original_netflow_ids) / len(canonical_netflow_ids))
+            if canonical_netflow_ids
+            else 0.0
+        ),
+        "canonical_node_count": int(len(canonical_tokens_by_id)),
+        "original_node_count": int(len(original_to_canonical)),
+        "max_originals_per_canonical_node": int(max(canonical_source_count.values(), default=0)),
+        "canonical_input_build_seconds": float(time.perf_counter() - started),
+    }
+    return {
+        "original_to_canonical": original_to_canonical,
+        "canonical_kind_by_id": canonical_kind_by_id,
+        "canonical_tokens_by_id": canonical_tokens_by_id,
+        "canonical_split_used_nodes": canonical_split_used_nodes,
+        "summary": summary,
+    }
+
+
+def _phase3e_write_optc_original_to_canonical_sidecar(
+    *,
+    path: Path,
+    original_to_canonical: Mapping[int, int],
+    indexid2summary: Mapping[int, tuple[str, str]],
+) -> dict[str, object]:
+    """Write original-to-canonical netflow mapping sidecar for hybrid identity."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["original_node_id", "canonical_node_id", "node_kind"],
+        )
+        writer.writeheader()
+        for original_id, canonical_id in sorted(
+            original_to_canonical.items(),
+            key=lambda item: int(item[0]),
+        ):
+            node_kind = normalize_piece(indexid2summary.get(int(original_id), ("unknown", ""))[0])
+            if node_kind != "netflow":
+                continue
+            writer.writerow(
+                {
+                    "original_node_id": int(original_id),
+                    "canonical_node_id": int(canonical_id),
+                    "node_kind": node_kind,
+                },
+            )
+            count += 1
+    return {"path": str(path), "row_count": int(count)}
+
+
 def _phase3e_build_node_table_from_db_node_maps(
     *,
     node_maps: Mapping[str, Any],
@@ -450,6 +887,15 @@ def _phase3e_count_split_events_db(
     max_events: int,
 ) -> tuple[int, int]:
     """Count one Phase3E split in PostgreSQL with the same slim stream predicate."""
+    if is_optc_dataset(config.dataset):
+        count = _phase3e_count_optc_index_events(
+            conn=conn,
+            year_month=year_month,
+            days=days,
+            node_maps=node_maps,
+            max_events=int(max_events),
+        )
+        return int(count), int(count)
     if int(max_events) > 0:
         bounded_count = _phase3e_count_bounded_split_events_db(
             conn=conn,
@@ -469,6 +915,50 @@ def _phase3e_count_split_events_db(
         allowed_hashes=None,
     )
     return int(full_count), int(full_count)
+
+
+def _phase3e_count_optc_index_events(
+    *,
+    conn: Any,
+    year_month: str,
+    days: Sequence[int],
+    node_maps: Mapping[str, Any],
+    max_events: int,
+) -> int:
+    """Count OpTC process-involved events using src/dst index ids."""
+    day_sql, day_params = _slim_temp_day_filter(year_month, days)
+    if not day_params:
+        return 0
+    limit_sql = ""
+    params: list[Any] = [*day_params]
+    if int(max_events) > 0:
+        limit_sql = "limit %s"
+        params.append(int(max_events))
+    process_ids = [
+        int(node_id)
+        for node_id, (kind, _summary) in node_maps.get("indexid2summary", {}).items()
+        if normalize_piece(kind) == PROCESS_NODE_TYPE
+    ]
+    if not process_ids:
+        return 0
+    params.extend([process_ids, process_ids])
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            select count(*)
+            from (
+                select e.src_index_id, e.dst_index_id
+                from event_table e
+                where {day_sql}
+                order by e.timestamp_rec, e._id
+                {limit_sql}
+            ) bounded_events
+            where bounded_events.src_index_id::bigint = any(%s)
+                or bounded_events.dst_index_id::bigint = any(%s)
+            """,
+            tuple(params),
+        )
+        return int(cur.fetchone()[0])
 
 
 def _phase3e_count_bounded_split_events_db(
@@ -619,6 +1109,7 @@ def _phase3e_write_event_index_split_from_db(
             int(max_events),
             "temp_table",
             abnormal_nodes=None,
+            optc_action_mode=is_optc_dataset(config.dataset),
         )
         for row in rows:
             if count >= int(expected_count):
@@ -677,13 +1168,15 @@ def _phase3e_compact_event_from_direct_stream(
     action_name_to_id: Mapping[str, int],
     node_id_to_idx: Mapping[int, int],
     node_kind_by_id: Mapping[int, str],
+    original_to_canonical: Mapping[int, int] | None = None,
 ) -> tuple[int, int, int, int, int, int]:
     """Return the six-field event_index tuple from one direct DB event."""
     action = str(event.operation)
     if action not in action_name_to_id:
         raise KeyError(f"Phase3E event action is outside ORTHRUS10: {action}")
-    src_node_id = int(event.src_node_id)
-    dst_node_id = int(event.dst_node_id)
+    mapping = original_to_canonical or {}
+    src_node_id = int(mapping.get(int(event.src_node_id), int(event.src_node_id)))
+    dst_node_id = int(mapping.get(int(event.dst_node_id), int(event.dst_node_id)))
     if src_node_id not in node_id_to_idx:
         raise KeyError(f"missing src node in used_node_lookup: {src_node_id}")
     if dst_node_id not in node_id_to_idx:
@@ -734,6 +1227,7 @@ def _phase3e_write_event_index_split_from_direct_db(
     node_kind_by_id: Mapping[int, str],
     config: SlimConfig,
     event_id_column: str,
+    original_to_canonical: Mapping[int, int] | None = None,
 ) -> dict[str, object]:
     """Stream one split directly from event_table into event_index memmap."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -768,6 +1262,8 @@ def _phase3e_write_event_index_split_from_direct_db(
             fetch_size=fetch_size,
             max_events=max_events,
             event_id_column=event_id_column,
+            config=config,
+            split=split,
         ):
             if count >= int(expected_count):
                 raise ValueError(
@@ -778,6 +1274,7 @@ def _phase3e_write_event_index_split_from_direct_db(
                 action_name_to_id,
                 node_id_to_idx,
                 node_kind_by_id,
+                original_to_canonical=original_to_canonical,
             )
             count += 1
             if progress_interval > 0 and count % progress_interval == 0:
@@ -860,6 +1357,204 @@ def _phase3e_write_event_index_split(
         "event_index_fingerprint": fingerprint,
         "fingerprint": fingerprint,
     }
+
+
+def build_phase3e_artifacts_from_db(config: SlimConfig) -> Path:
+    """Build Phase3E node/action/event-index artifacts from label-free DB streams."""
+    started = time.perf_counter()
+    output_dir = Path(config.result_root) / config.out_tag
+    output_dir.mkdir(parents=True, exist_ok=True)
+    process_cfg = _load_process_config(config)
+    db_cfg = _cfg_for_dataset(config.dataset)
+    db_cfg.database.host = os.getenv("CLAD_DB_HOST", "localhost")
+    db_cfg.database.user = os.getenv("CLAD_DB_USER", "postgres")
+    db_cfg.database.password = os.getenv("CLAD_DB_PASSWORD", "")
+    db_cfg.database.port = int(os.getenv("CLAD_DB_PORT", "5432"))
+    split_metadata = _resolve_db_split_metadata(config, db_cfg)
+    split_days = {
+        "train": [int(day) for day in split_metadata["train_days"]],
+        "validation": [int(day) for day in split_metadata["validation_days"]],
+        "test": [int(day) for day in split_metadata["test_days"]],
+    }
+    max_events_by_split = {
+        "train": int(config.max_train_events),
+        "validation": int(config.max_ref_events),
+        "test": int(config.max_test_events),
+    }
+    paths = _phase3e_artifact_paths(config)
+    node_root = paths["node_embeddings"].parent
+    action_root = paths["action_embeddings"].parent
+    event_root = paths["event_meta"].parent
+    adapter = ResidualWord2VecTokenAdapter(
+        load_pretrained_residual_embedder(
+            config.pretrained_residual_embedder_path,
+            expected_dim=int(config.sspm_target_dim),
+        ),
+        str(config.pretrained_residual_embedder_path),
+    )
+    cur, conn = init_database_connection(db_cfg)
+    try:
+        node_maps = build_node_maps(cur)
+        event_filter = bool(use_event_type_filter(db_cfg))
+        event_id_column = _phase3e_detect_event_id_column(conn)
+        pass1 = _phase3e_scan_used_nodes_pass1(
+            conn=conn,
+            year_month=str(db_cfg.dataset.year_month),
+            split_days=split_days,
+            event_filter=event_filter,
+            fetch_size=int(config.fetch_size),
+            max_events_by_split=max_events_by_split,
+            event_id_column=event_id_column,
+            config=config,
+        )
+        lookup_strategy = "temp_used_node_join"
+        indexid2summary, meta_by_kind, lookup_seconds = _phase3e_fetch_used_node_lookup_joined(
+            conn=conn,
+            used_node_ids=set(pass1["used_node_ids"]),
+        )
+        canonical_summary: dict[str, object] = {}
+        original_to_canonical: dict[int, int] = {}
+        original_to_canonical_sidecar: dict[str, object] = {}
+        if (
+            is_optc_dataset(config.dataset)
+            and str(getattr(config, "optc_netflow_node_canonicalization", "none"))
+            == OPTC_NETFLOW_CANONICALIZATION_V1_3
+        ):
+            canonical_inputs = _phase3e_build_optc_canonical_artifact_inputs(
+                used_node_ids=set(pass1["used_node_ids"]),
+                split_used_nodes=pass1["split_used_nodes"],
+                indexid2summary=indexid2summary,
+                meta_by_kind=meta_by_kind,
+                config=config,
+                process_cfg=process_cfg,
+            )
+            node_table = build_node_embedding_table(
+                node_tokens_by_id=canonical_inputs["canonical_tokens_by_id"],
+                split_node_ids=canonical_inputs["canonical_split_used_nodes"],
+                adapter=adapter,
+                src_node_ids=set(),
+                dst_node_ids=set(),
+            )
+            canonical_summary = dict(canonical_inputs["summary"])
+            node_table.meta.update(canonical_summary)
+            node_table.coverage.update(canonical_summary)
+            original_to_canonical = dict(canonical_inputs["original_to_canonical"])
+            node_kind_by_id = dict(canonical_inputs["canonical_kind_by_id"])
+            original_to_canonical_sidecar = _phase3e_write_optc_original_to_canonical_sidecar(
+                path=paths["event_meta"].with_name("original_to_canonical_netflow.csv"),
+                original_to_canonical=original_to_canonical,
+                indexid2summary=indexid2summary,
+            )
+            canonical_summary["original_to_canonical_sidecar"] = str(
+                original_to_canonical_sidecar.get("path", ""),
+            )
+            canonical_summary["original_to_canonical_sidecar_rows"] = int(
+                original_to_canonical_sidecar.get("row_count", 0),
+            )
+        else:
+            node_table = _phase3e_build_node_table_from_used_lookup(
+                used_node_ids=set(pass1["used_node_ids"]),
+                split_used_nodes=pass1["split_used_nodes"],
+                indexid2summary=indexid2summary,
+                meta_by_kind=meta_by_kind,
+                adapter=adapter,
+                config=config,
+                process_cfg=process_cfg,
+            )
+            node_kind_by_id = {
+                int(node_id): normalize_piece(kind)
+                for node_id, (kind, _summary) in indexid2summary.items()
+            }
+        action_table = build_action_embedding_table(adapter)
+        node_paths = save_node_embedding_table(node_table, node_root)
+        action_paths = save_action_embedding_table(action_table, action_root)
+        node_id_to_idx = node_table.node_id_to_idx
+        action_name_to_id = action_table.name_to_action_id
+        split_meta: dict[str, dict[str, object]] = {}
+        for split in ("train", "validation", "test"):
+            split_meta[split] = _phase3e_write_event_index_split_from_direct_db(
+                conn=conn,
+                year_month=str(db_cfg.dataset.year_month),
+                days=split_days[split],
+                event_filter=event_filter,
+                fetch_size=int(config.fetch_size),
+                max_events=int(max_events_by_split[split]),
+                expected_count=int(pass1["split_counts"].get(split, 0)),
+                path=paths[f"event_index_{split}"],
+                split=split,
+                node_id_to_idx=node_id_to_idx,
+                action_name_to_id=action_name_to_id,
+                node_kind_by_id=node_kind_by_id,
+                config=config,
+                event_id_column=event_id_column,
+                original_to_canonical=original_to_canonical,
+            )
+    finally:
+        cur.close()
+        conn.close()
+
+    coverage_audit = build_node_action_coverage_audit(node_table, action_table)
+    coverage_path = save_node_action_coverage_audit(coverage_audit, node_root)
+    event_meta = {
+        "schema_version": "phase3e_event_index_v1",
+        "dataset": str(config.dataset),
+        "semantic_mode": str(config.semantic_mode),
+        "splits": split_meta,
+        "split_metadata": split_metadata,
+        "event_type_filter": bool(use_event_type_filter(db_cfg)),
+        "event_filter": "Orthrus10" if use_event_type_filter(db_cfg) else "none",
+        "node_embedding_meta_path": str(paths["node_meta"]),
+        "action_embedding_meta_path": str(paths["action_meta"]),
+        "node_embedding_path": str(paths["node_embeddings"]),
+        "action_embedding_path": str(paths["action_embeddings"]),
+        "word2vec_model_path": str(adapter.model_path),
+        "word2vec_fingerprint": str(coverage_audit.get("word2vec_fingerprint", "")),
+        "node_word2vec_source": "residual_pretrained",
+        "node_lookup_seconds": float(lookup_seconds),
+        "node_lookup_strategy": str(lookup_strategy),
+        "elapsed_seconds": float(time.perf_counter() - started),
+        "optc_netflow_canonicalization": canonical_summary,
+        "original_to_canonical_sidecar": original_to_canonical_sidecar,
+        "leakage_contract": {
+            "labels_used_for_artifacts": False,
+            "ground_truth_used": False,
+            "test_labels_used_before_emission": False,
+        },
+    }
+    paths["event_meta"].parent.mkdir(parents=True, exist_ok=True)
+    paths["event_meta"].write_text(
+        json.dumps(event_meta, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    eval_payload = {
+        "dataset": str(config.dataset),
+        "out_tag": str(config.out_tag),
+        "phase3e_artifact_build_only": True,
+        "semantic_mode": str(config.semantic_mode),
+        "train_events_actual": int(split_meta["train"]["num_events"]),
+        "validation_events_actual": int(split_meta["validation"]["num_events"]),
+        "test_events_actual": int(split_meta["test"]["num_events"]),
+        "outputs": {
+            **node_paths,
+            **action_paths,
+            "event_index_meta": str(paths["event_meta"]),
+            "event_index_train": str(paths["event_index_train"]),
+            "event_index_validation": str(paths["event_index_validation"]),
+            "event_index_test": str(paths["event_index_test"]),
+            "coverage_audit": str(coverage_path),
+        },
+        "node_action_coverage": coverage_audit,
+        "leakage_check": {
+            "labels_used_for_artifacts": False,
+            "ground_truth_used": False,
+        },
+    }
+    eval_path = output_dir / "eval_causal_semantics_slim.json"
+    eval_path.write_text(
+        json.dumps(eval_payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    return eval_path
 
 
 def _phase3e_json_order_by(order_by: Sequence[object] | object) -> list[str]:
@@ -1267,6 +1962,58 @@ def _phase3e_train_base_output_payload(
     }
 
 
+def _phase3e_write_base_profile_outputs(
+    output_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Path]:
+    """Write Phase3E base profile interval rows and aggregate summary."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / "phase3e_base_profile.csv"
+    summary_path = output_dir / "phase3e_base_profile_summary.json"
+    fields = [
+        "dataset",
+        "out_tag",
+        "event_count",
+        "events_per_second",
+        "target_lookup_seconds",
+        "make_context_seconds",
+        "update_states_seconds",
+        "batch_stack_seconds",
+        "train_batch_step_seconds",
+        "rss_mb",
+        "active_state_nodes",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(dict(row))
+    summary = {
+        "interval_count": int(len(rows)),
+        "total_events": int(max((int(row.get("event_count", 0)) for row in rows), default=0)),
+        "total_target_lookup_seconds": float(
+            sum(float(row.get("target_lookup_seconds", 0.0)) for row in rows),
+        ),
+        "total_make_context_seconds": float(
+            sum(float(row.get("make_context_seconds", 0.0)) for row in rows),
+        ),
+        "total_update_states_seconds": float(
+            sum(float(row.get("update_states_seconds", 0.0)) for row in rows),
+        ),
+        "total_batch_stack_seconds": float(
+            sum(float(row.get("batch_stack_seconds", 0.0)) for row in rows),
+        ),
+        "total_train_batch_step_seconds": float(
+            sum(float(row.get("train_batch_step_seconds", 0.0)) for row in rows),
+        ),
+    }
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {"csv": csv_path, "summary": summary_path}
+
+
 def train_phase3e_real_diag_from_event_index(
     *,
     config: SlimConfig,
@@ -1380,11 +2127,273 @@ def train_phase3e_real_diag_from_event_index(
     return model, stats
 
 
+def _phase3e_train_base_from_event_index(
+    *,
+    config: SlimConfig,
+    train_index: np.ndarray,
+    node_embeddings: np.ndarray,
+    action_embeddings: np.ndarray,
+) -> tuple[SSPMLowRankModel, dict[str, Any]]:
+    """Train a Phase3E base SSPM checkpoint from compact event-index records."""
+    if bool(config.real_diag_train_gamma):
+        return train_phase3e_real_diag_from_event_index(
+            config=config,
+            event_index=train_index,
+            node_embeddings=node_embeddings,
+            action_embeddings=action_embeddings,
+        )
+    records = _phase3e_event_index_array(train_index)
+    model = SSPMLowRankModel(_make_sspm_config(config, None))
+    progress_interval = int(config.progress_interval_events)
+    profile_enabled = bool(getattr(config, "phase3e_base_profile", False))
+    profile_interval = max(int(getattr(config, "phase3e_profile_interval_events", 100000)), 1)
+    profile_rows: list[dict[str, Any]] = []
+    profile_target_seconds = 0.0
+    profile_context_seconds = 0.0
+    profile_update_seconds = 0.0
+    profile_batch_stack_seconds = 0.0
+    profile_train_step_seconds = 0.0
+    profile_events_since_flush = 0
+    profile_events_seen_total = 0
+    profile_interval_started = time.perf_counter()
+    train_rss_peak_mb = _current_rss_mb()
+    started = time.perf_counter()
+
+    def profile_batch_callback(row: Mapping[str, Any]) -> None:
+        nonlocal profile_batch_stack_seconds
+        nonlocal profile_train_step_seconds
+        profile_batch_stack_seconds += float(row.get("batch_stack_seconds", 0.0))
+        profile_train_step_seconds += float(row.get("train_batch_step_seconds", 0.0))
+
+    def rows_for_epoch(epoch: int):
+        nonlocal profile_batch_stack_seconds
+        nonlocal profile_context_seconds
+        nonlocal profile_events_seen_total
+        nonlocal profile_events_since_flush
+        nonlocal profile_interval_started
+        nonlocal profile_train_step_seconds
+        nonlocal profile_target_seconds
+        nonlocal profile_update_seconds
+        nonlocal train_rss_peak_mb
+        epoch_count = 0
+        model.reset_state_memory()
+        _stage_log(
+            config,
+            "phase3e_train_base_epoch_start",
+            epoch=int(epoch) + 1,
+            epochs=int(config.sspm_epochs),
+            count=int(records.shape[0]),
+        )
+        for index, row in enumerate(records, start=1):
+            fields = _phase3e_fields_from_index_row(row)
+            target_started = time.perf_counter()
+            z = _phase3e_target_from_index_row(row, node_embeddings, action_embeddings)
+            profile_target_seconds += time.perf_counter() - target_started
+            context_started = time.perf_counter()
+            context = model.make_context(fields)
+            profile_context_seconds += time.perf_counter() - context_started
+            update_started = time.perf_counter()
+            model.update_states(fields, z)
+            profile_update_seconds += time.perf_counter() - update_started
+            epoch_count += 1
+            profile_events_seen_total += 1
+            profile_events_since_flush += 1
+            train_rss_peak_mb = max(float(train_rss_peak_mb), _current_rss_mb())
+            if progress_interval > 0 and index % progress_interval == 0:
+                _stage_log(
+                    config,
+                    "phase3e_train_base_epoch_progress",
+                    epoch=int(epoch) + 1,
+                    count=index,
+                )
+            if profile_enabled and index % profile_interval == 0:
+                elapsed = max(time.perf_counter() - profile_interval_started, 1e-9)
+                profile_rows.append(
+                    {
+                        "dataset": str(config.dataset),
+                        "out_tag": str(config.out_tag),
+                        "event_count": int(profile_events_seen_total),
+                        "events_per_second": float(profile_events_since_flush / elapsed),
+                        "target_lookup_seconds": float(profile_target_seconds),
+                        "make_context_seconds": float(profile_context_seconds),
+                        "update_states_seconds": float(profile_update_seconds),
+                        "batch_stack_seconds": float(profile_batch_stack_seconds),
+                        "train_batch_step_seconds": float(profile_train_step_seconds),
+                        "rss_mb": float(_current_rss_mb()),
+                        "active_state_nodes": int(len(getattr(model, "node_to_slot", {}))),
+                    },
+                )
+                profile_target_seconds = 0.0
+                profile_context_seconds = 0.0
+                profile_update_seconds = 0.0
+                profile_batch_stack_seconds = 0.0
+                profile_train_step_seconds = 0.0
+                profile_events_since_flush = 0
+                profile_interval_started = time.perf_counter()
+            yield context, z
+        _stage_log(
+            config,
+            "phase3e_train_base_epoch_end",
+            epoch=int(epoch) + 1,
+            count=epoch_count,
+        )
+
+    _stage_log(
+        config,
+        "phase3e_train_base_start",
+        count=int(records.shape[0]),
+        epochs=int(config.sspm_epochs),
+        batch_events=int(config.sspm_train_batch_events),
+    )
+    stats = dict(
+        model.train_stream_batches(
+            rows_for_epoch,
+            epochs=int(config.sspm_epochs),
+            batch_events=int(config.sspm_train_batch_events),
+            log_prefix=f"[SSPM][{config.dataset}][PHASE3E_BASE]",
+            profile_callback=profile_batch_callback if profile_enabled else None,
+        ),
+    )
+    stats["train_seconds"] = float(time.perf_counter() - started)
+    stats["train_rss_peak_mb"] = float(train_rss_peak_mb)
+    stats["train_events_actual"] = int(records.shape[0])
+    if profile_enabled:
+        if (
+            profile_events_since_flush > 0
+            or profile_target_seconds > 0.0
+            or profile_context_seconds > 0.0
+            or profile_update_seconds > 0.0
+            or profile_batch_stack_seconds > 0.0
+            or profile_train_step_seconds > 0.0
+        ):
+            elapsed = max(time.perf_counter() - profile_interval_started, 1e-9)
+            profile_rows.append(
+                {
+                    "dataset": str(config.dataset),
+                    "out_tag": str(config.out_tag),
+                    "event_count": int(profile_events_seen_total),
+                    "events_per_second": float(profile_events_since_flush / elapsed),
+                    "target_lookup_seconds": float(profile_target_seconds),
+                    "make_context_seconds": float(profile_context_seconds),
+                    "update_states_seconds": float(profile_update_seconds),
+                    "batch_stack_seconds": float(profile_batch_stack_seconds),
+                    "train_batch_step_seconds": float(profile_train_step_seconds),
+                    "rss_mb": float(_current_rss_mb()),
+                    "active_state_nodes": int(len(getattr(model, "node_to_slot", {}))),
+                },
+            )
+        stats["phase3e_base_profile_rows"] = profile_rows
+    stats.setdefault("early_stop_reason", stats.get("stop_reason", ""))
+    model.reset_state()
+    model.training_stats = dict(stats)
+    _stage_log(config, "phase3e_train_base_end", count=int(records.shape[0]))
+    return model, stats
+
+
+def _phase3e_run_train_base_checkpoint(config: SlimConfig) -> Path:
+    """Train and save a Phase3E base SSPM checkpoint from existing artifacts."""
+    started = time.perf_counter()
+    output_dir = Path(config.result_root) / config.out_tag
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths, event_meta, train_index, node_embeddings, action_embeddings = (
+        _phase3e_open_precompute_arrays(config)
+    )
+    validation_index, validation_count = _phase3e_open_split_event_index(
+        paths,
+        event_meta,
+        "validation",
+        max_events=int(config.max_ref_events),
+    )
+    model, train_stats = _phase3e_train_base_from_event_index(
+        config=config,
+        train_index=train_index,
+        node_embeddings=node_embeddings,
+        action_embeddings=action_embeddings,
+    )
+    validation_stats = _phase3e_fit_checkpoint_calibration_from_validation(
+        config=config,
+        model=model,
+        validation_index=validation_index,
+        node_embeddings=node_embeddings,
+        action_embeddings=action_embeddings,
+    )
+    train_stats = {**dict(train_stats), "validation": dict(validation_stats)}
+    checkpoint_path = Path(config.sspm_checkpoint_path)
+    if not str(checkpoint_path):
+        checkpoint_path = (
+            Path(config.sspm_base_checkpoint_root)
+            / f"{config.dataset}_E4_PHASE3E_BASE_FULL.pkl"
+        )
+    checkpoint_path = save_sspm_checkpoint(
+        checkpoint_path,
+        config=config,
+        model=model,
+        embedder=load_pretrained_residual_embedder(
+            config.pretrained_residual_embedder_path,
+            expected_dim=int(config.sspm_target_dim),
+        ),
+        process_cfg=None,
+        train_count=int(train_index.shape[0]),
+        validation_count=int(validation_count),
+        phase3e_meta={
+            "event_index_meta_path": str(paths["event_meta"]),
+            "node_embedding_meta_path": str(paths["node_meta"]),
+            "action_embedding_meta_path": str(paths["action_meta"]),
+            "word2vec_model_path": str(config.pretrained_residual_embedder_path),
+        },
+    )
+    eval_payload = _phase3e_train_base_output_payload(
+        config=config,
+        checkpoint_path=checkpoint_path,
+        train_stats=train_stats,
+        train_count=int(train_index.shape[0]),
+        validation_count=int(validation_count),
+        output_dir=output_dir,
+        started=started,
+    )
+    if bool(getattr(config, "phase3e_base_profile", False)):
+        profile_paths = _phase3e_write_base_profile_outputs(
+            output_dir,
+            list(train_stats.get("phase3e_base_profile_rows", [])),
+        )
+        eval_payload.setdefault("outputs", {}).update(
+            {
+                "phase3e_base_profile_csv": str(profile_paths["csv"]),
+                "phase3e_base_profile_summary": str(profile_paths["summary"]),
+            },
+        )
+    eval_path = output_dir / "eval_causal_semantics_slim.json"
+    eval_path.write_text(
+        json.dumps(eval_payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    write_effective_config(
+        output_dir,
+        config,
+        model,
+        embedder_loaded=True,
+        train_count=int(train_index.shape[0]),
+        validation_count=int(validation_count),
+        test_count=0,
+    )
+    write_metrics_json(
+        output_dir,
+        config,
+        model,
+        eval_payload,
+        train_count=int(train_index.shape[0]),
+        validation_count=int(validation_count),
+        test_count=0,
+        embedder_loaded=True,
+    )
+    return eval_path
+
+
 def run_phase3e_train_base_from_precompute(config: SlimConfig) -> Path:
     """Train one Phase3E base checkpoint from existing precompute artifacts."""
     if str(config.sspm_score_head) != "conditional_action_semantic":
         _phase3e_require_legacy_head_path_disabled()
-    return run_phase3g_conditional_train_from_precompute(config)
+    return _phase3e_run_train_base_checkpoint(config)
 
 
 def _phase3e_config_for_state_model(config: SlimConfig, state_model: str) -> SlimConfig:
@@ -1835,8 +2844,13 @@ def stable_json_hash(payload: object) -> str:
 # Explicit cross-module imports; replaces the migration namespace bridge.
 from scripts.pipeline.checks.preflight import (
     _bounded_stream_node_hashes,
+    build_node_maps,
+    _load_process_config,
+    _phase3e_detect_event_id_column,
+    _phase3e_scan_used_nodes_pass1,
     _phase3e_stream_split_events_direct,
     _prepare_slim_node_lookup_temp_table,
+    _resolve_db_split_metadata,
     _slim_temp_day_filter,
     stream_dataset_rows_slim,
 )
@@ -1849,6 +2863,8 @@ from scripts.pipeline.features.semantic_features import (
     row_fields,
     split_summary_tokens,
 )
+from scripts.pipeline.io.db_stream import _cfg_for_dataset
+from scripts.data.get_dataset import use_event_type_filter
 from scripts.pipeline.outputs.alert_output import _current_rss_mb
 from scripts.pipeline.outputs.metrics_summary import _encode_row, _ofsm_compression_summary
 from scripts.pipeline.state.online_state_runtime import (
@@ -1859,4 +2875,6 @@ from scripts.pipeline.state.online_state_runtime import (
     _phase3e_target_from_index_row,
     _resolved_residual_embed_cache_path,
     _stage_log,
+    load_pretrained_residual_embedder,
+    save_sspm_checkpoint,
 )

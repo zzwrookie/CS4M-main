@@ -7,6 +7,11 @@ from typing import Any
 import numpy as np
 
 
+def full_score_eval_required_inputs() -> list[str]:
+    """Return files required for post-inference full-score evaluation."""
+    return ["online_event_score_trace.csv"]
+
+
 def target_for_dataset(dataset: str) -> dict[str, int]:
     name = str(dataset).upper()
     if name.startswith("THEIA"):

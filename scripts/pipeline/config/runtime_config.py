@@ -40,12 +40,24 @@ from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_LEGACY_SEMANTIC_MODE,
     CLEARSCOPE_REFINED_SEMANTIC_MODE,
     CLEARSCOPE_SEMANTIC_RULES_VERSION,
+    CLEARSCOPE_V3_SEMANTIC_MODE,
+    CLEARSCOPE_V31_SEMANTIC_MODE,
+    CLEARSCOPE_V32_SEMANTIC_MODE,
+    CLEARSCOPE_V32_CACHE_ONLY_SEMANTIC_MODE,
     android_process_natural_tokens,
     android_process_natural_tokens_refined,
     clearscope_residual_text_refined,
+    clearscope_residual_text_v3,
+    clearscope_residual_text_v31,
+    clearscope_residual_text_v32,
+    clearscope_residual_text_v32_cache_only,
     clearscope_file_nll_role,
     clearscope_file_natural_tokens,
     clearscope_file_natural_tokens_refined,
+    clearscope_file_natural_tokens_v3,
+    clearscope_file_natural_tokens_v31,
+    clearscope_file_natural_tokens_v32,
+    clearscope_file_natural_tokens_v32_cache_only,
     clearscope_file_residual_text,
     clearscope_netflow_nll_role,
     clearscope_netflow_natural_tokens,
@@ -56,11 +68,15 @@ from cs4m.semantics.clearscope_android import (
 )
 from cs4m.semantics.cadets_freebsd import (
     CADETS_SEMANTIC_RULES_VERSION,
+    cadets_semantic_mode_is_v3_safe_lexical,
     freebsd_file_natural_tokens,
+    freebsd_file_natural_tokens_v3_safe_lexical,
     freebsd_file_nll_role,
     freebsd_netflow_natural_tokens,
+    freebsd_netflow_natural_tokens_v3_safe_lexical,
     freebsd_netflow_nll_role,
     freebsd_process_natural_tokens,
+    freebsd_process_natural_tokens_v3_safe_lexical,
     is_cadets_dataset,
 )
 from cs4m.models.cs4m_lowrank import (
@@ -253,6 +269,7 @@ ACTION_TYPE_ALERT_POLICIES = {
     "default",
     "theia_v1",
     "cadets_e4_v2_group_v1",
+    "cadets_e4_v3_policy_smoke_v1",
     "clearscope_node_pair_v1",
     "clearscope_android_v2",
     "clearscope_v31_fp_guard_v1",
@@ -425,6 +442,24 @@ SLIM_SPLIT_OVERRIDES: dict[str, dict[str, Any]] = {
         "train": [2, 3, 4, 5, 7, 8, 9],
         "val": [10],
         "test": [6, 11, 12, 13],
+    },
+    "OPTC_051": {
+        "year_month": "2019-09",
+        "train": [19, 20, 21],
+        "val": [22],
+        "test": [23, 24, 25],
+    },
+    "OPTC_201": {
+        "year_month": "2019-09",
+        "train": [19, 20, 21],
+        "val": [22],
+        "test": [23, 24, 25],
+    },
+    "OPTC_501": {
+        "year_month": "2019-09",
+        "train": [19, 20, 21],
+        "val": [22],
+        "test": [23, 24, 25],
     },
 }
 TEST_SCORING_NODE_MAP_KEYS = (
@@ -1228,6 +1263,9 @@ class SlimConfig:
     event_index_cache_mode: str = "auto"
     event_index_cache_dir: str = "outputs/cache/event_indices/{DATASET}"
     event_index_debug_fields: bool = False
+    optc_netflow_node_canonicalization: str = "none"
+    phase3e_base_profile: bool = False
+    phase3e_profile_interval_events: int = 100000
     sspm_train_backend: str = "numpy"
     sspm_infer_backend: str = "numpy"
     sspm_score_head: str = "conditional_action_semantic"
@@ -1258,6 +1296,10 @@ class SlimConfig:
         "outputs/cache/phase3g_endpoint_suppression/{DATASET}"
     )
     conditional_endpoint_suppression_summary_mode: str = "online_minimal"
+    dual_channel_node_support_enabled: bool = False
+    dual_channel_node_support_score_floor: float = 0.0
+    dual_channel_node_support_threshold: int = 2
+    dual_channel_node_support_channel: str = "event_semantic_node_support_ge_2"
     sspm_conditional_train_data_mode: str = "memmap"
     sspm_conditional_max_epochs: int = 80
     sspm_conditional_e3_max_epochs: int = 2
@@ -1340,7 +1382,7 @@ class SlimConfig:
     db_stream_mode: str = "auto"
     event_score_mode: str = "res_only"
     semantic_embedding_method: str = "word2vec"
-    semantic_mode: str = CLEARSCOPE_REFINED_SEMANTIC_MODE
+    semantic_mode: str = CLEARSCOPE_V3_SEMANTIC_MODE
     word2vec_window: int = 3
     word2vec_min_count: int = 1
     word2vec_sg: int = 1
@@ -1349,6 +1391,7 @@ class SlimConfig:
     word2vec_workers: int = 4
     word2vec_seed: int = 0
     word2vec_oov_policy: str = "unk"
+    word2vec_corpus_file_dir: str = ""
     theia_netflow_policy: str = "fixed"
     action_type_alert_policy: str = "default"
     node_pool_score_mode: str = "base_conf"

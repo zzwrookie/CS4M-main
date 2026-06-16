@@ -43,6 +43,135 @@ def _phase3g_apply_both_cold_unseen_alert_policy(
     return True, 0
 
 
+DUAL_CHANNEL_NODE_SUPPORT_EXPLANATION_FIELDS = [
+    "stream_pos",
+    "event_index",
+    "trigger_node_idx",
+    "trigger_node_role",
+    "event_score",
+    "score_floor",
+    "event_semantic_max_score_seen",
+    "event_semantic_near_threshold_count",
+    "event_semantic_support_event_count",
+    "support_threshold",
+    "source_target_case",
+    "alert_channel",
+    "threshold_source",
+]
+
+
+def _phase3g_copy_train_group_summary_from_head_metadata(
+    *,
+    output_dir: Path,
+    head_metadata: Mapping[str, Any],
+) -> str:
+    """Copy train-derived group score summary from head metadata into result dir."""
+    source_text = str(head_metadata.get("train_group_score_summary_csv", "")).strip()
+    if not source_text:
+        train_stats = dict(head_metadata.get("train_stats", {}) or {})
+        source_text = str(train_stats.get("train_group_score_summary_csv", "")).strip()
+    if not source_text:
+        return ""
+    source_path = Path(source_text)
+    if not source_path.exists():
+        return ""
+    destination = Path(output_dir) / "train_group_score_summary.csv"
+    if source_path.resolve() != destination.resolve():
+        destination.write_bytes(source_path.read_bytes())
+    return str(destination)
+
+
+class _DualChannelNodeSupportState:
+    """Online node support state for the E5 dual-channel smoke path."""
+
+    def __init__(self) -> None:
+        self.nodes: dict[int, dict[str, Any]] = {}
+
+
+def _dual_channel_event_nodes(row: Mapping[str, Any]) -> list[tuple[int, str]]:
+    """Return src/dst nodes for one event, deduplicated in event order."""
+    nodes: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for node_idx, node_role in (
+        (int(row["src_node_idx"]), "src"),
+        (int(row["dst_node_idx"]), "dst"),
+    ):
+        if node_idx in seen:
+            continue
+        seen.add(node_idx)
+        nodes.append((node_idx, node_role))
+    return nodes
+
+
+def _dual_channel_node_support_update(
+    state: _DualChannelNodeSupportState,
+    *,
+    node_idx: int,
+    node_role: str,
+    stream_pos: int,
+    event_index: int,
+    event_score: float,
+    score_floor: float,
+    support_threshold: int,
+    source_target_case: str,
+    alert_channel: str,
+) -> dict[str, Any] | None:
+    """Update node support and return an explanation row when it triggers."""
+    node_state = state.nodes.setdefault(
+        int(node_idx),
+        {
+            "event_semantic_max_score_seen": 0.0,
+            "event_semantic_near_threshold_count": 0,
+            "event_semantic_support_event_count": 0,
+            "first_stream_pos": int(stream_pos),
+            "last_stream_pos": int(stream_pos),
+            "triggered": False,
+        },
+    )
+    node_state["event_semantic_support_event_count"] = (
+        int(node_state["event_semantic_support_event_count"]) + 1
+    )
+    node_state["last_stream_pos"] = int(stream_pos)
+    node_state["event_semantic_max_score_seen"] = max(
+        float(node_state["event_semantic_max_score_seen"]),
+        float(event_score),
+    )
+    if float(event_score) >= float(score_floor):
+        node_state["event_semantic_near_threshold_count"] = (
+            int(node_state["event_semantic_near_threshold_count"]) + 1
+        )
+    should_trigger = (
+        not bool(node_state["triggered"])
+        and float(node_state["event_semantic_max_score_seen"]) >= float(score_floor)
+        and int(node_state["event_semantic_near_threshold_count"])
+        >= int(support_threshold)
+    )
+    if not should_trigger:
+        return None
+    node_state["triggered"] = True
+    return {
+        "stream_pos": int(stream_pos),
+        "event_index": int(event_index),
+        "trigger_node_idx": int(node_idx),
+        "trigger_node_role": str(node_role),
+        "event_score": float(event_score),
+        "score_floor": float(score_floor),
+        "event_semantic_max_score_seen": float(
+            node_state["event_semantic_max_score_seen"],
+        ),
+        "event_semantic_near_threshold_count": int(
+            node_state["event_semantic_near_threshold_count"],
+        ),
+        "event_semantic_support_event_count": int(
+            node_state["event_semantic_support_event_count"],
+        ),
+        "support_threshold": int(support_threshold),
+        "source_target_case": str(source_target_case),
+        "alert_channel": str(alert_channel),
+        "threshold_source": "validation_event_semantic_p999_half",
+    }
+
+
 def _phase3g_conditional_score_summary_payload(
     *,
     config: SlimConfig,
@@ -203,11 +332,14 @@ def _score_phase3g_conditional_fast_stream(
     }
     raw_paths: dict[str, Path] = {}
     event_alert_count = 0
+    dual_channel_node_support_alert_count = 0
+    dual_channel_node_support_path = ""
     test_count = 0
     start_rss_mb = _current_rss_mb()
     test_phase_peak_rss_mb = start_rss_mb
     node_coverage = OnlineNodeCoverageTracker()
     node_evidence_by_node: dict[int, int] = {}
+    dual_channel_state = _DualChannelNodeSupportState()
     target_case_counts = {
         EVENT_SEMANTIC_TARGET: 0,
         BOTH_COLD_ACTION_TARGET: 0,
@@ -226,6 +358,7 @@ def _score_phase3g_conditional_fast_stream(
         state_merge_profile_writer = None
         score_trace_writer = None
         node_evidence_writer = None
+        dual_channel_explanation_writer = None
         both_cold_unseen_suppressed_writer = None
         if output_dir is not None:
             raw_paths = _raw_output_paths(Path(output_dir))
@@ -240,6 +373,9 @@ def _score_phase3g_conditional_fast_stream(
             )
             raw_paths["action_type_node_evidence_events"] = (
                 Path(output_dir) / "action_type_node_evidence_events.csv"
+            )
+            raw_paths["dual_channel_node_support_explanations"] = (
+                Path(output_dir) / "online_event_alert_explanations.csv"
             )
             event_writer = stack.enter_context(
                 StreamingCsvWriter(raw_paths["events"], EVENT_RAW_FIELDS),
@@ -261,6 +397,16 @@ def _score_phase3g_conditional_fast_stream(
             both_cold_unseen_suppressed_raw_path = str(
                 raw_paths["both_cold_unseen_suppressed_events"],
             )
+            if bool(config.dual_channel_node_support_enabled):
+                dual_channel_explanation_writer = stack.enter_context(
+                    StreamingCsvWriter(
+                        raw_paths["dual_channel_node_support_explanations"],
+                        DUAL_CHANNEL_NODE_SUPPORT_EXPLANATION_FIELDS,
+                    ),
+                )
+                dual_channel_node_support_path = str(
+                    raw_paths["dual_channel_node_support_explanations"],
+                )
             if "event_score_trace" in raw_paths:
                 score_trace_writer = stack.enter_context(
                     StreamingCsvWriter(
@@ -552,6 +698,30 @@ def _score_phase3g_conditional_fast_stream(
                     )
                 score_summary_obj.observe(event_score)
                 case_summary_obj.observe(target_case, event_score)
+                dual_channel_alerts: list[dict[str, Any]] = []
+                if (
+                    bool(config.dual_channel_node_support_enabled)
+                    and str(target_case) == EVENT_SEMANTIC_TARGET
+                ):
+                    for node_idx, node_role in _dual_channel_event_nodes(row):
+                        explanation = _dual_channel_node_support_update(
+                            dual_channel_state,
+                            node_idx=node_idx,
+                            node_role=node_role,
+                            stream_pos=int(stream_pos),
+                            event_index=int(row["event_id"]),
+                            event_score=float(event_score),
+                            score_floor=float(
+                                config.dual_channel_node_support_score_floor,
+                            ),
+                            support_threshold=int(
+                                config.dual_channel_node_support_threshold,
+                            ),
+                            source_target_case=EVENT_SEMANTIC_TARGET,
+                            alert_channel=str(config.dual_channel_node_support_channel),
+                        )
+                        if explanation is not None:
+                            dual_channel_alerts.append(explanation)
                 if score_trace_writer is not None:
                     score_trace_writer.write_row(
                         {
@@ -930,6 +1100,62 @@ def _score_phase3g_conditional_fast_stream(
                         event_score=event_score,
                         side="dst",
                     )
+                if dual_channel_alerts:
+                    for explanation in dual_channel_alerts:
+                        dual_channel_node_support_alert_count += 1
+                        event_alert_count += 1
+                        trigger_node = int(explanation["trigger_node_idx"])
+                        dual_alert_row = _phase3f_raw_alert_row(
+                            row,
+                            stream_pos,
+                            float(explanation["event_semantic_max_score_seen"]),
+                            float(explanation["score_floor"]),
+                            float(explanation["event_semantic_max_score_seen"]),
+                            float(explanation["event_score"]),
+                            "validation_event_semantic_p999_half_node_support",
+                        )
+                        dual_alert_row["target_case"] = "event_semantic_node_support"
+                        dual_alert_row["target_case_threshold"] = float(
+                            explanation["score_floor"],
+                        )
+                        dual_alert_row["threshold_level"] = "node_support"
+                        dual_alert_row["threshold_group_key"] = str(
+                            config.dual_channel_node_support_channel,
+                        )
+                        dual_alert_row["validation_group_count"] = int(
+                            explanation["event_semantic_support_event_count"],
+                        )
+                        dual_alert_row.update(
+                            {
+                                "low_support_policy": "dual_channel_node_support",
+                                "group_validation_max": "",
+                                "parent_threshold": "",
+                                "global_threshold": "",
+                                "final_threshold_source": explanation[
+                                    "threshold_source"
+                                ],
+                                "adaptive_margin_used": "",
+                                "validation_count_bucket": "",
+                            },
+                        )
+                        if event_writer is not None:
+                            event_writer.write_row(dual_alert_row)
+                        if dual_channel_explanation_writer is not None:
+                            dual_channel_explanation_writer.write_row(explanation)
+                        node_type = (
+                            str(dual_alert_row.get("src_type", ""))
+                            if trigger_node == src_idx
+                            else str(dual_alert_row.get("dst_type", ""))
+                        )
+                        node_coverage.observe(
+                            node_idx=trigger_node,
+                            node_type=node_type,
+                            event_id=int(row["event_id"]),
+                            event_score=float(
+                                explanation["event_semantic_max_score_seen"],
+                            ),
+                            side=str(explanation["trigger_node_role"]),
+                        )
             if (
                 int(config.progress_interval_events) > 0
                 and test_count > 0
@@ -1076,6 +1302,14 @@ def _score_phase3g_conditional_fast_stream(
         "demoted_event_count": int(demoted_event_count),
         "budget_capped_event_count": int(budget_capped_event_count),
         "high_priority_event_alert_count": int(high_priority_event_alert_count),
+        "dual_channel_node_support": {
+            "enabled": bool(config.dual_channel_node_support_enabled),
+            "alert_count": int(dual_channel_node_support_alert_count),
+            "score_floor": float(config.dual_channel_node_support_score_floor),
+            "support_threshold": int(config.dual_channel_node_support_threshold),
+            "channel": str(config.dual_channel_node_support_channel),
+            "explanations_csv": str(dual_channel_node_support_path),
+        },
         "action_type_alert_policy": {
             "policy_name": str(config.action_type_alert_policy),
             "node_evidence_count": int(node_evidence_count),
@@ -1254,6 +1488,10 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
     head, head_metadata = ConditionalSemanticHead.load(
         checkpoint_path,
         expected_head_arch=str(config.sspm_conditional_head_arch),
+    )
+    train_group_score_summary_csv = _phase3g_copy_train_group_summary_from_head_metadata(
+        output_dir=output_dir,
+        head_metadata=head_metadata,
     )
     if int(head.config.input_dim) != _phase3g_action_input_dim(node_embeddings):
         raise ValueError("conditional head input_dim does not match Phase3E embeddings")
@@ -1498,6 +1736,7 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
         abnormal_db_node_ids=abnormal_nodes,
         topk_values=_parse_int_list(config.node_pool_topk_values),
         node_pool_score_mode=str(config.node_pool_score_mode),
+        config=config,
     )
     group_alert_policy_rows = _phase3g_update_group_report_rows_with_eval(
         path=output_dir / "group_alert_policy_summary.csv",
@@ -1557,6 +1796,7 @@ def run_phase3g_conditional_load_and_infer_from_precompute(config: SlimConfig) -
         group_alert_policy_rows=group_alert_policy_rows,
         required_dual_head_summary_paths=required_dual_head_summary_paths,
     )
+    score_summary_payload["train_group_score_summary_csv"] = train_group_score_summary_csv
     score_summary_path = output_dir / "score_summary.json"
     score_summary_path.write_text(
         json.dumps(score_summary_payload, indent=2, sort_keys=True, default=str) + "\n",

@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from scripts.pipeline.config.runtime_config import *
+from scripts.pipeline.config.runtime_config import (
+    _PHASE3E_CHECKPOINT_FORBIDDEN_KEYS,
+    _PHASE3E_METADATA_ALLOWED_KEYS,
+    _PHASE3E_METADATA_LEAKAGE_KEY_TERMS,
+    _PHASE3E_METADATA_MAX_LIST_LENGTH,
+)
 
 
 def _make_sspm_config(config: SlimConfig, process_cfg: ProcessSemanticConfig | None) -> SSPMLowRankConfig:

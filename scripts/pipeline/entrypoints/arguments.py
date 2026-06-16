@@ -151,6 +151,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--event_index_cache_dir", default=SlimConfig.event_index_cache_dir)
     parser.add_argument("--event_index_debug_fields", action="store_true")
     parser.add_argument(
+        "--optc_netflow_node_canonicalization",
+        default=SlimConfig.optc_netflow_node_canonicalization,
+    )
+    parser.add_argument("--phase3e_base_profile", action="store_true")
+    parser.add_argument(
+        "--phase3e_profile_interval_events",
+        type=int,
+        default=SlimConfig.phase3e_profile_interval_events,
+    )
+    parser.add_argument(
         "--sspm_train_backend",
         choices=sorted(SSPM_TRAIN_BACKENDS),
         default=SlimConfig.sspm_train_backend,
@@ -286,6 +296,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--conditional_endpoint_suppression_cache_dir",
         default=SlimConfig.conditional_endpoint_suppression_cache_dir,
+    )
+    parser.add_argument(
+        "--dual_channel_node_support_enabled",
+        type=_parse_bool,
+        default=SlimConfig.dual_channel_node_support_enabled,
+    )
+    parser.add_argument(
+        "--dual_channel_node_support_score_floor",
+        type=float,
+        default=SlimConfig.dual_channel_node_support_score_floor,
+    )
+    parser.add_argument(
+        "--dual_channel_node_support_threshold",
+        type=int,
+        default=SlimConfig.dual_channel_node_support_threshold,
+    )
+    parser.add_argument(
+        "--dual_channel_node_support_channel",
+        default=SlimConfig.dual_channel_node_support_channel,
     )
     parser.add_argument(
         "--sspm_conditional_train_data_mode",
@@ -791,7 +820,8 @@ def _validate_phase3e_config(config: SlimConfig) -> None:
     if str(config.action_type_alert_policy) not in ACTION_TYPE_ALERT_POLICIES:
         raise ValueError(
             "ACTION_TYPE_ALERT_POLICY must be default, theia_v1, "
-            "cadets_e4_v2_group_v1, clearscope_node_pair_v1, "
+            "cadets_e4_v2_group_v1, cadets_e4_v3_policy_smoke_v1, "
+            "clearscope_node_pair_v1, "
             "clearscope_android_v2, clearscope_v31_fp_guard_v1, "
             "clearscope_v31_fp_guard_v2, clearscope_v31_fp_guard_v3, "
             "clearscope_v31_fp_guard_v3b, or clearscope_v31_fp_guard_v3c",

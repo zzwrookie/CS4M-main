@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from cs4m.semantics.optc_windows import is_optc_dataset
 from scripts.pipeline.config.runtime_config import *
 
 
@@ -118,6 +119,28 @@ def build_node_maps(cur) -> dict[str, Any]:
         "process_meta": process_meta,
         "file_meta": file_meta,
     }
+
+
+OPTC_ECAR_TO_ORTHRUS10_ACTION = {
+    "OPEN": "EVENT_OPEN",
+    "READ": "EVENT_READ",
+    "WRITE": "EVENT_WRITE",
+    "MODIFY": "EVENT_WRITE",
+    "CREATE": "EVENT_WRITE",
+    "RENAME": "EVENT_WRITE",
+    "DELETE": "EVENT_WRITE",
+    "START": "EVENT_EXECUTE",
+    "MESSAGE": "EVENT_SENDMSG",
+    "TERMINATE": "EVENT_CLONE",
+}
+
+
+def optc_ecar_to_orthrus10_action(action: object) -> str:
+    """Map OpTC eCAR action names into the existing ORTHRUS10 action space."""
+    text = str(action or "").strip().upper()
+    if text in ORTHRUS10_EVENT_TYPES:
+        return text
+    return OPTC_ECAR_TO_ORTHRUS10_ACTION.get(text, "EVENT_OPEN")
 
 
 def _coerce_optional_int(value: Any) -> int | None:
@@ -268,6 +291,108 @@ def _rollback_after_db_stream_failure(conn) -> None:
         return
 
 
+def _stream_events_optc_index(
+    conn,
+    year_month: str,
+    days: Sequence[int],
+    node_maps: Mapping[str, Any],
+    fetch_size: int,
+    max_events: int,
+    abnormal_nodes: set[int],
+):
+    """Stream OpTC rows by src/dst index ids and map eCAR actions into ORTHRUS10."""
+    produced = 0
+    next_event_index = 0
+    indexid2summary = node_maps["indexid2summary"]
+    for day in [int(value) for value in days]:
+        start_ns, end_ns = _day_bounds(year_month, day)
+        name = f"optc_index_stream_{os.getpid()}_{day}_{time.monotonic_ns()}"
+        cur = conn.cursor(name=name)
+        try:
+            cur.itersize = int(fetch_size)
+            cur.execute(
+                """
+                select src_index_id, operation, dst_index_id, event_uuid,
+                    timestamp_rec, _id
+                from event_table
+                where timestamp_rec >= %s and timestamp_rec < %s
+                order by timestamp_rec, _id
+                """,
+                (start_ns, end_ns),
+            )
+            while True:
+                rows = cur.fetchmany(int(fetch_size))
+                if not rows:
+                    break
+                for src_idx, op, dst_idx, event_uuid, ts, db_id in rows:
+                    if int(max_events) > 0 and produced >= int(max_events):
+                        return
+                    try:
+                        src_idx_int = int(src_idx)
+                        dst_idx_int = int(dst_idx)
+                    except (TypeError, ValueError):
+                        continue
+                    src_summary = indexid2summary.get(src_idx_int)
+                    dst_summary = indexid2summary.get(dst_idx_int)
+                    if src_summary is None or dst_summary is None:
+                        continue
+                    actor_idx = src_idx_int
+                    obj_idx = dst_idx_int
+                    actor_kind, actor_text = src_summary
+                    obj_kind, obj_text = dst_summary
+                    if actor_kind != PROCESS_NODE_TYPE and obj_kind != PROCESS_NODE_TYPE:
+                        continue
+                    if actor_kind != PROCESS_NODE_TYPE:
+                        actor_idx, obj_idx = obj_idx, actor_idx
+                        actor_kind, obj_kind = obj_kind, actor_kind
+                        actor_text, obj_text = obj_text, actor_text
+                    action_text = optc_ecar_to_orthrus10_action(op)
+                    object_type = str(obj_kind or "unknown")
+                    info_src, info_dst, rel, info_src_type, info_dst_type = information_flow(
+                        int(actor_idx),
+                        int(obj_idx),
+                        action_text,
+                        object_type,
+                    )
+                    src_bad = int(actor_idx) in abnormal_nodes
+                    dst_bad = int(obj_idx) in abnormal_nodes
+                    row: dict[str, Any] = {
+                        "pos": int(next_event_index),
+                        "event_index": int(next_event_index),
+                        "event_id": int(db_id),
+                        "timestamp_ns": int(ts),
+                        "process_idx": int(actor_idx),
+                        "src_idx": int(actor_idx),
+                        "dst_idx": int(obj_idx),
+                        "info_src": int(info_src),
+                        "info_dst": int(info_dst),
+                        "relation_id": int(rel),
+                        "info_src_type": int(info_src_type),
+                        "info_dst_type": int(info_dst_type),
+                        "action": action_text,
+                        "object_type": object_type,
+                        "src_kind": str(actor_kind),
+                        "dst_kind": str(obj_kind),
+                        "src_summary": str(actor_text),
+                        "dst_summary": str(obj_text),
+                        "text": " ".join(
+                            (
+                                f"A_{NODE_TYPE_TOKENS.get(str(actor_kind), 'UNK')}",
+                                str(actor_text),
+                                action_text,
+                                f"O_{NODE_TYPE_TOKENS.get(str(obj_kind), 'UNK')}",
+                                str(obj_text),
+                            ),
+                        ),
+                        "label": 2 if src_bad and dst_bad else (1 if src_bad or dst_bad else 0),
+                    }
+                    yield row
+                    produced += 1
+                    next_event_index += 1
+        finally:
+            cur.close()
+
+
 def stream_dataset_rows(
     conn,
     year_month: str,
@@ -277,22 +402,34 @@ def stream_dataset_rows(
     fetch_size: int,
     max_events: int,
     abnormal_nodes: set[int] | None = None,
+    optc_action_mode: bool = False,
 ):
     """Yield DB stream rows with labels disabled by default and netflow metadata enriched."""
     safe_abnormal_nodes = set() if abnormal_nodes is None else set(abnormal_nodes)
     include_labels = bool(safe_abnormal_nodes)
-    rows = _stream_events(
-        conn,
-        year_month,
-        [int(day) for day in days],
-        node_maps["indexid2summary"],
-        node_maps["hash2type"],
-        node_maps["hash2uuid_index"],
-        safe_abnormal_nodes,
-        bool(event_filter),
-        int(fetch_size),
-        int(max_events),
-    )
+    if bool(optc_action_mode):
+        rows = _stream_events_optc_index(
+            conn,
+            year_month,
+            [int(day) for day in days],
+            node_maps,
+            int(fetch_size),
+            int(max_events),
+            safe_abnormal_nodes,
+        )
+    else:
+        rows = _stream_events(
+            conn,
+            year_month,
+            [int(day) for day in days],
+            node_maps["indexid2summary"],
+            node_maps["hash2type"],
+            node_maps["hash2uuid_index"],
+            safe_abnormal_nodes,
+            bool(event_filter),
+            int(fetch_size),
+            int(max_events),
+        )
     for row in rows:
         enriched = enrich_row_with_netflow(row, node_maps["netflow_meta"])
         enriched = enrich_row_with_process_meta(
@@ -319,6 +456,7 @@ def stream_dataset_rows_slim(
     db_stream_mode: str,
     abnormal_nodes: set[int] | None = None,
     stream_status: dict[str, str] | None = None,
+    optc_action_mode: bool = False,
 ):
     """Select the slim DB test stream implementation and record actual mode."""
     requested_mode = str(db_stream_mode)
@@ -336,6 +474,20 @@ def stream_dataset_rows_slim(
             fetch_size,
             max_events,
             abnormal_nodes=abnormal_nodes,
+            optc_action_mode=optc_action_mode,
+        )
+    if bool(optc_action_mode):
+        _publish_db_stream_status(stream_status, requested_mode, "python_lookup")
+        return stream_dataset_rows(
+            conn,
+            year_month,
+            days,
+            node_maps,
+            event_filter,
+            fetch_size,
+            max_events,
+            abnormal_nodes=abnormal_nodes,
+            optc_action_mode=True,
         )
 
     try:
@@ -348,6 +500,7 @@ def stream_dataset_rows_slim(
             fetch_size,
             max_events,
             abnormal_nodes=abnormal_nodes,
+            optc_action_mode=optc_action_mode,
         )
     except SlimTempStreamError as exc:
         if requested_mode == "temp_table":
@@ -420,6 +573,8 @@ def _phase3e_stream_split_events_direct(
     split: str = "unknown",
 ):
     """Stream raw event table rows in stable Phase3E order without node table joins."""
+    optc_action_mode = config is not None and is_optc_dataset(config.dataset)
+
     def log(stage: str, **values: object) -> None:
         if config is None:
             return
@@ -430,7 +585,7 @@ def _phase3e_stream_split_events_direct(
         return iter(())
     operation_sql = ""
     params: list[Any] = [*day_params]
-    if event_filter:
+    if event_filter and not optc_action_mode:
         operation_sql = "and e.operation = any(%s)"
         params.append(list(ORTHRUS10_EVENT_TYPES))
     limit_sql = ""
@@ -525,7 +680,11 @@ def _phase3e_stream_split_events_direct(
                         event_id=int(event_id),
                         src_node_id=int(src_idx),
                         dst_node_id=int(dst_idx),
-                        operation=str(op),
+                        operation=(
+                            optc_ecar_to_orthrus10_action(op)
+                            if optc_action_mode
+                            else str(op)
+                        ),
                         event_uuid=str(event_uuid),
                         timestamp_rec=int(timestamp_rec),
                     )
@@ -843,6 +1002,7 @@ def _compact_temp_event_row(
     row: Sequence[Any],
     event_index: int,
     abnormal_nodes: set[int],
+    optc_action_mode: bool = False,
 ) -> dict[str, Any] | None:
     event_id: int | None = None
     if len(row) == 15:
@@ -1004,7 +1164,7 @@ def _compact_temp_event_row(
         actor_process_path, obj_process_path = obj_process_path, actor_process_path
         actor_process_cmd, obj_process_cmd = obj_process_cmd, actor_process_cmd
         actor_file_path, obj_file_path = obj_file_path, actor_file_path
-    action_text = str(op)
+    action_text = optc_ecar_to_orthrus10_action(op) if optc_action_mode else str(op)
     object_type = str(obj_type or "unknown")
     text = " ".join(
         [
@@ -1117,6 +1277,7 @@ def _make_residual_embedding_config(
         word2vec_workers=int(config.word2vec_workers),
         word2vec_seed=int(config.word2vec_seed),
         word2vec_oov_policy=str(config.word2vec_oov_policy),
+        word2vec_corpus_file_dir=str(config.word2vec_corpus_file_dir),
     )
 
 

@@ -27,6 +27,25 @@ ACTION_HEAD_ROOT="${ACTION_HEAD_CHECKPOINT_ROOT:-${REPO_ROOT}/outputs/models/pha
 ACTION_VALIDATION_CACHE_DIR="${ACTION_VALIDATION_CACHE_DIR:-${REPO_ROOT}/outputs/cache/phase3g_action_validation/${DATASET}}"
 ENDPOINT_CACHE_DIR="${CONDITIONAL_ENDPOINT_SUPPRESSION_CACHE_DIR:-${REPO_ROOT}/outputs/cache/phase3g_endpoint_suppression_compact/${DATASET}}"
 PRETRAINED_EMBEDDER="${PRETRAINED_RESIDUAL_EMBEDDER_PATH:-${REPO_ROOT}/outputs/models/residual_word2vec/THEIA_E3_RAW_DETAIL_RULES_V1_LATENT64_word2vec_window3.pkl}"
+SSPM_CONDITIONAL_HEAD_ARCH="${SSPM_CONDITIONAL_HEAD_ARCH:-shared_lowrank_v1}"
+
+case "${SSPM_CONDITIONAL_HEAD_ARCH}" in
+    shared_lowrank_v1)
+        ACTION_HEAD_NAME="THEIA_E3_E4_PHASE3G_CONDITIONAL_HEAD.pkl"
+        ACTION_HEAD_LABEL="THEIA_E3 E4 conditional head"
+        ;;
+    dual_lowrank_by_target_case_v2)
+        ACTION_HEAD_NAME="THEIA_E3_E4_PHASE3G_CONDITIONAL_DUAL_HEAD.pkl"
+        ACTION_HEAD_LABEL="THEIA_E3 E4 conditional dual head"
+        ;;
+    *)
+        echo "error: unsupported THEIA_E3 SSPM_CONDITIONAL_HEAD_ARCH: " \
+            "${SSPM_CONDITIONAL_HEAD_ARCH}" >&2
+        exit 2
+        ;;
+esac
+
+ACTION_HEAD_PATH="${ACTION_HEAD_CHECKPOINT_PATH_E4_PHASE3G:-${ACTION_HEAD_ROOT}/${ACTION_HEAD_NAME}}"
 
 missing_paths=()
 
@@ -52,8 +71,7 @@ preflight() {
     record_missing_file "${PRETRAINED_EMBEDDER}" "THEIA_E3 residual Word2Vec embedder"
     record_missing_file "${CHECKPOINT_ROOT}/THEIA_E3_E4_PHASE3E_BASE_FULL.pkl" \
         "THEIA_E3 E4 base checkpoint"
-    record_missing_file "${ACTION_HEAD_ROOT}/THEIA_E3_E4_PHASE3G_CONDITIONAL_HEAD.pkl" \
-        "THEIA_E3 E4 conditional head"
+    record_missing_file "${ACTION_HEAD_PATH}" "${ACTION_HEAD_LABEL}"
     record_missing_file \
         "${PHASE3E_CACHE_ROOT}/compact_used_node_embeddings/THEIA_E3/compact_node_embeddings.npy" \
         "THEIA_E3 compact node embeddings"
@@ -109,10 +127,12 @@ env \
     PHASE3E_CACHE_ROOT="${PHASE3E_CACHE_ROOT}" \
     SSPM_BASE_CHECKPOINT_ROOT="${CHECKPOINT_ROOT}" \
     ACTION_HEAD_CHECKPOINT_ROOT="${ACTION_HEAD_ROOT}" \
+    ACTION_HEAD_CHECKPOINT_PATH_E4_PHASE3G="${ACTION_HEAD_PATH}" \
     ACTION_VALIDATION_CACHE_DIR="${ACTION_VALIDATION_CACHE_DIR}" \
     CONDITIONAL_ENDPOINT_SUPPRESSION_CACHE_DIR="${ENDPOINT_CACHE_DIR}" \
     PRETRAINED_RESIDUAL_EMBEDDER_PATH="${PRETRAINED_EMBEDDER}" \
     SSPM_SCORE_HEAD="conditional_action_semantic" \
+    SSPM_CONDITIONAL_HEAD_ARCH="${SSPM_CONDITIONAL_HEAD_ARCH}" \
     SSPM_TRAIN_MODE="load_and_infer" \
     SSPM_INFER_FAST_PATH="true" \
     RSS_PROFILE_MODE="online_minimal" \

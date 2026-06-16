@@ -23,9 +23,13 @@ tmp/
 # Generated CS4M artifacts
 backups/
 outputs/cache/
+outputs/diagnostics/
 outputs/models/
 outputs/results/
 *.memmap
+
+# Generated paper/report build outputs
+paper_rewriting_output/
 
 # Broken/local git recovery backups
 .git_broken_backup_*/

@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
+import pickle
+
+from cs4m.semantics.optc_windows import is_optc_dataset
 from scripts.pipeline.config.runtime_config import *
+
+
+def _new_streaming_score_summary(threshold: float, bins: int):
+    from scripts.pipeline.features.semantic_features import _StreamingScoreSummary
+
+    return _StreamingScoreSummary(threshold, bins=bins)
 
 
 class _TargetCaseStreamingSummary:
     """Streaming score summary split by conditional target case."""
 
     def __init__(self, bins: int = 20000) -> None:
-        self._summaries: dict[str, _StreamingScoreSummary] = {
-            EVENT_SEMANTIC_TARGET: _StreamingScoreSummary(0.0, bins=bins),
-            BOTH_COLD_ACTION_TARGET: _StreamingScoreSummary(0.0, bins=bins),
+        self._summaries: dict[str, Any] = {
+            EVENT_SEMANTIC_TARGET: _new_streaming_score_summary(0.0, bins),
+            BOTH_COLD_ACTION_TARGET: _new_streaming_score_summary(0.0, bins),
         }
         self._bins = int(bins)
 
     def observe(self, case_name: str, score: float) -> None:
         key = str(case_name)
         if key not in self._summaries:
-            self._summaries[key] = _StreamingScoreSummary(0.0, bins=self._bins)
+            self._summaries[key] = _new_streaming_score_summary(0.0, self._bins)
         self._summaries[key].observe(float(score))
 
     def summary(self, thresholds: Mapping[str, float]) -> dict[str, Any]:
@@ -35,7 +44,7 @@ class _ConditionalGroupStreamingSummary:
     """Collect compact test score and alert counts by conditional level-1 group."""
 
     def __init__(self, bins: int = 2000) -> None:
-        self._summaries: dict[int, _StreamingScoreSummary] = {}
+        self._summaries: dict[int, Any] = {}
         self.alert_counts: dict[int, int] = {}
         self._bins = int(bins)
 
@@ -57,7 +66,7 @@ class _ConditionalGroupStreamingSummary:
                 int(dst_type_id),
             ),
         )
-        self._summaries.setdefault(key, _StreamingScoreSummary(0.0, bins=self._bins)).observe(
+        self._summaries.setdefault(key, _new_streaming_score_summary(0.0, self._bins)).observe(
             float(score),
         )
         if bool(alert):
@@ -407,6 +416,7 @@ def _phase3g_group_eval_counts(
     *,
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
+    compact_node_labels: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     tp = 0
     fp = 0
@@ -418,6 +428,7 @@ def _phase3g_group_eval_counts(
             row,
             idx_to_db_node_id,
             abnormal_db_node_ids,
+            compact_node_labels=compact_node_labels,
         )
         event_id = int(row.get("event_index", -1))
         event_score = float(_safe_float(row.get("event_score"), 0.0) or 0.0)
@@ -426,9 +437,11 @@ def _phase3g_group_eval_counts(
         else:
             fp += 1
         if src_bad:
-            covered.add(int(idx_to_db_node_id.get(int(row.get("info_src", -1)), -1)))
+            src_idx = int(row.get("info_src") or row.get("src_idx") or -1)
+            covered.add(src_idx if compact_node_labels else int(idx_to_db_node_id.get(src_idx, -1)))
         if dst_bad:
-            covered.add(int(idx_to_db_node_id.get(int(row.get("info_dst", -1)), -1)))
+            dst_idx = int(row.get("info_dst") or row.get("dst_idx") or -1)
+            covered.add(dst_idx if compact_node_labels else int(idx_to_db_node_id.get(dst_idx, -1)))
         coverage_tracker.observe(
             node_idx=int(row.get("info_src") or row.get("src_idx") or -1),
             node_type=str(row.get("src_type", "")),
@@ -452,7 +465,10 @@ def _phase3g_group_eval_counts(
     for coverage_row in coverage_tracker.rows():
         node_idx = int(coverage_row.get("node_idx", -1))
         db_node_id = int(idx_to_db_node_id.get(node_idx, -1))
-        node_label = "malicious" if db_node_id in abnormal_db_node_ids else "benign"
+        node_label = (compact_node_labels or {}).get(
+            node_idx,
+            "malicious" if db_node_id in abnormal_db_node_ids else "benign",
+        )
         if node_label == "malicious":
             strict_tp += 1
         else:
@@ -481,7 +497,17 @@ def _phase3g_update_group_report_rows_with_eval(
     config: SlimConfig,
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
+    compact_node_labels: Mapping[int, str] | None = None,
 ) -> list[dict[str, Any]]:
+    if compact_node_labels is None and is_optc_dataset(getattr(config, "dataset", "")):
+        original_to_canonical = _phase3g_load_optc_original_to_canonical(config)
+        if original_to_canonical:
+            compact_node_labels, _ = _phase3g_compact_gt_labels_for_eval(
+                abnormal_db_node_ids=abnormal_db_node_ids,
+                idx_to_db_node_id=idx_to_db_node_id,
+                original_to_canonical_netflow=original_to_canonical,
+                node_id_to_idx=_phase3g_load_node_id_to_idx_for_eval(config),
+            )
     if not path.exists():
         return []
     rows = list(_iter_csv_rows(path))
@@ -507,6 +533,7 @@ def _phase3g_update_group_report_rows_with_eval(
             alerts_by_group.get(key, []),
             idx_to_db_node_id=idx_to_db_node_id,
             abnormal_db_node_ids=abnormal_db_node_ids,
+            compact_node_labels=compact_node_labels,
         )
         payload = dict(row)
         payload.update(metrics)
@@ -569,11 +596,17 @@ def _phase3g_write_demoted_group_summary(config: SlimConfig, output_dir: Path) -
 def _phase3g_load_validation_group_scores(
     cache_meta: Mapping[str, Any],
 ) -> dict[tuple[int, int, int], list[float]]:
-    score_path = Path(str(cache_meta.get("validation_conditional_scores", "")))
-    group_path = Path(str(cache_meta.get("validation_conditional_group_keys", "")))
-    if not score_path.exists() or not group_path.exists():
+    score_value = str(cache_meta.get("validation_conditional_scores", "")).strip()
+    group_value = str(cache_meta.get("validation_conditional_group_keys", "")).strip()
+    if not score_value or not group_value:
         return {}
     count = int(cache_meta.get("count", 0) or 0)
+    if count <= 0:
+        return {}
+    score_path = Path(score_value)
+    group_path = Path(group_value)
+    if not score_path.is_file() or not group_path.is_file():
+        return {}
     scores = np.memmap(score_path, dtype=np.float32, mode="r", shape=(count,))
     group_keys = np.memmap(group_path, dtype=np.int64, mode="r", shape=(count,))
     grouped: dict[tuple[int, int, int], list[float]] = {}
@@ -853,13 +886,16 @@ def _phase3g_label_for_alert_row(
     row: Mapping[str, Any],
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
+    *,
+    compact_node_labels: Mapping[int, str] | None = None,
 ) -> tuple[int, bool, bool]:
     src_idx = int(row.get("info_src") or row.get("src_idx") or -1)
     dst_idx = int(row.get("info_dst") or row.get("dst_idx") or -1)
     src_db = int(idx_to_db_node_id.get(src_idx, -1))
     dst_db = int(idx_to_db_node_id.get(dst_idx, -1))
-    src_bad = src_db in abnormal_db_node_ids
-    dst_bad = dst_db in abnormal_db_node_ids
+    compact_labels = compact_node_labels or {}
+    src_bad = compact_labels.get(src_idx) == "malicious" or src_db in abnormal_db_node_ids
+    dst_bad = compact_labels.get(dst_idx) == "malicious" or dst_db in abnormal_db_node_ids
     label = 2 if src_bad and dst_bad else (1 if src_bad or dst_bad else 0)
     return label, src_bad, dst_bad
 
@@ -888,6 +924,83 @@ def _phase3g_event_node_coverage_from_alerts(
     return tracker.rows()
 
 
+def _phase3g_compact_gt_labels_for_eval(
+    *,
+    abnormal_db_node_ids: set[int],
+    idx_to_db_node_id: Mapping[int, int],
+    original_to_canonical_netflow: Mapping[int, int] | None = None,
+    node_id_to_idx: Mapping[int, int] | None = None,
+) -> tuple[dict[int, str], dict[str, Any]]:
+    """Return compact node labels for post-stream canonical-aware GT evaluation."""
+    original_to_canonical = {
+        int(node_id): int(canonical_id)
+        for node_id, canonical_id in dict(original_to_canonical_netflow or {}).items()
+    }
+    if node_id_to_idx is None:
+        node_id_to_idx = {int(node_id): int(idx) for idx, node_id in idx_to_db_node_id.items()}
+    else:
+        node_id_to_idx = {int(node_id): int(idx) for node_id, idx in dict(node_id_to_idx).items()}
+
+    labels: dict[int, str] = {}
+    mapped_originals = 0
+    canonical_netflow_originals = 0
+    canonical_netflow_compact: set[int] = set()
+    for original_node_id in sorted(int(node_id) for node_id in abnormal_db_node_ids):
+        lookup_node_id = int(original_to_canonical.get(original_node_id, original_node_id))
+        compact_idx = node_id_to_idx.get(lookup_node_id)
+        if compact_idx is None:
+            continue
+        labels[int(compact_idx)] = "malicious"
+        mapped_originals += 1
+        if original_node_id in original_to_canonical:
+            canonical_netflow_originals += 1
+            canonical_netflow_compact.add(int(compact_idx))
+
+    summary = {
+        "original_gt_total": int(len(abnormal_db_node_ids)),
+        "original_gt_compact_mapped": int(mapped_originals),
+        "original_gt_compact_missing": int(len(abnormal_db_node_ids) - mapped_originals),
+        "unique_compact_gt_total": int(len(labels)),
+        "canonical_netflow_original_gt_count": int(canonical_netflow_originals),
+        "canonical_netflow_unique_compact_count": int(len(canonical_netflow_compact)),
+    }
+    return labels, summary
+
+
+def _phase3g_load_optc_original_to_canonical(config: SlimConfig) -> dict[int, int]:
+    """Load OpTC original netflow node id to canonical node id mapping when available."""
+    if not is_optc_dataset(getattr(config, "dataset", "")):
+        return {}
+    try:
+        paths = _phase3e_require_artifacts(config)
+    except Exception:
+        return {}
+    sidecar = Path(paths.get("event_meta", Path())).with_name("original_to_canonical_netflow.csv")
+    if not sidecar.exists():
+        return {}
+    mapping: dict[int, int] = {}
+    with sidecar.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                mapping[int(row["original_node_id"])] = int(row["canonical_node_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return mapping
+
+
+def _phase3g_load_node_id_to_idx_for_eval(config: SlimConfig) -> dict[int, int]:
+    """Load Phase3E node id to compact index mapping for post-stream evaluation."""
+    paths = _phase3e_require_artifacts(config)
+    raw_path = paths.get("node_id_to_idx")
+    path = Path(raw_path) if raw_path is not None else Path()
+    if raw_path is None or not path.exists():
+        path = Path(paths["node_embeddings"]).with_name("node_id_to_idx.pkl")
+    with path.open("rb") as handle:
+        loaded = pickle.load(handle)
+    return {int(node_id): int(idx) for node_id, idx in dict(loaded).items()}
+
+
 def _phase3g_write_event_node_coverage_outputs(
     *,
     output_dir: Path,
@@ -895,6 +1008,8 @@ def _phase3g_write_event_node_coverage_outputs(
     event_rows: Sequence[Mapping[str, Any]],
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
+    compact_node_labels: Mapping[int, str] | None = None,
+    compact_gt_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_dir = Path(output_dir)
     raw_path = output_dir / "online_event_node_coverage.csv"
@@ -906,12 +1021,16 @@ def _phase3g_write_event_node_coverage_outputs(
     strict_rows: list[dict[str, Any]] = []
     relaxed_rows: list[dict[str, Any]] = []
     covered_malicious: set[int] = set()
+    compact_labels = dict(compact_node_labels or {})
     for raw_row in coverage_rows:
         node_idx = int(raw_row.get("node_idx", -1))
         db_node_id = int(idx_to_db_node_id.get(node_idx, -1))
-        node_label = "malicious" if db_node_id in abnormal_db_node_ids else "benign"
+        node_label = compact_labels.get(
+            node_idx,
+            "malicious" if db_node_id in abnormal_db_node_ids else "benign",
+        )
         if node_label == "malicious":
-            covered_malicious.add(db_node_id)
+            covered_malicious.add(node_idx if compact_labels else db_node_id)
         base = dict(raw_row)
         base["node_label"] = node_label
         strict_rows.append(
@@ -964,6 +1083,8 @@ def _phase3g_write_event_node_coverage_outputs(
     strict_counts = _eval_result_counts(strict_rows)
     relaxed_counts = _eval_result_counts(relaxed_rows)
     total_malicious = int(len(abnormal_db_node_ids))
+    if compact_gt_summary is not None:
+        total_malicious = int(compact_gt_summary.get("unique_compact_gt_total", total_malicious))
     summary = {
         "online_event_node_coverage_csv": str(raw_path),
         "online_event_node_coverage_strict_csv": str(strict_path),
@@ -988,6 +1109,8 @@ def _phase3g_write_event_node_coverage_outputs(
         ),
         "relaxed_node_recall": float(relaxed_counts["tp"] / max(total_malicious, 1)),
     }
+    if compact_gt_summary is not None:
+        summary["canonical_gt_eval"] = dict(compact_gt_summary)
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
@@ -1002,12 +1125,21 @@ def _phase3g_write_node_pool_rebuilt_outputs(
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
     topk_values: Sequence[int],
+    node_pool_score_mode: str = "base_conf",
+    event_rows: Sequence[Mapping[str, Any]] | None = None,
+    compact_node_labels: Mapping[int, str] | None = None,
+    compact_gt_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_dir = Path(output_dir)
+    support_scores = _phase3g_v31_support_scores(event_rows or [])
     final_nodes_raw = [
         {
             "node_id": int(row.get("node_idx", -1)),
-            "node_score": float(row.get("max_event_score", 0.0)),
+            "node_score": float(
+                support_scores.get(int(row.get("node_idx", -1)), row.get("max_event_score", 0.0))
+                if str(node_pool_score_mode) == "base_conf_v31_support"
+                else row.get("max_event_score", 0.0),
+            ),
             "candidate_mass": float(row.get("max_event_score", 0.0)),
             "residual_mass": float(row.get("max_event_score", 0.0)),
             "residual_max": float(row.get("max_event_score", 0.0)),
@@ -1021,11 +1153,20 @@ def _phase3g_write_node_pool_rebuilt_outputs(
         }
         for row in coverage_rows
     ]
-    node_labels = {
-        int(row.get("node_idx", -1)): "malicious"
-        for row in coverage_rows
-        if int(idx_to_db_node_id.get(int(row.get("node_idx", -1)), -1)) in abnormal_db_node_ids
-    }
+    final_nodes_raw.sort(key=_node_pool_sort_key)
+    if compact_node_labels is not None:
+        node_labels = {
+            int(node_idx): str(label)
+            for node_idx, label in compact_node_labels.items()
+            if str(label) == "malicious"
+        }
+    else:
+        node_labels = {
+            int(row.get("node_idx", -1)): "malicious"
+            for row in coverage_rows
+            if int(idx_to_db_node_id.get(int(row.get("node_idx", -1)), -1))
+            in abnormal_db_node_ids
+        }
     _write_csv(output_dir / "final_node_pool_alerts.csv", _attach_node_labels(final_nodes_raw, node_labels), NODE_EVAL_FIELDS)
     _write_csv(output_dir / "online_node_alerts.csv", _attach_node_labels(final_nodes_raw, node_labels), NODE_EVAL_FIELDS)
     topk_metrics = _node_pool_topk_metrics(final_nodes_raw, node_labels, topk_values)
@@ -1043,17 +1184,110 @@ def _phase3g_write_node_pool_rebuilt_outputs(
     )
     summary = {
         "node_pool_rebuilt_from": "online_event_node_coverage",
+        "node_pool_score_mode": str(node_pool_score_mode),
         "node_pool_count": int(len(final_nodes_raw)),
         "node_topk_metrics_csv": str(topk_csv),
         "node_topk_metrics_json": str(topk_json),
         "node_pool_topk": topk_metrics,
     }
+    if compact_gt_summary is not None:
+        summary["canonical_gt_eval"] = dict(compact_gt_summary)
     summary_path = output_dir / "node_pool_rebuilt_summary.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
     return summary
+
+
+def _phase3g_v31_support_scores(
+    event_rows: Sequence[Mapping[str, Any]],
+) -> dict[int, float]:
+    """Build runtime-only support scores for rebuilt ClearScope v31 node pools."""
+    states: dict[int, dict[str, Any]] = {}
+    for row in event_rows:
+        event_score = float(_safe_float(row.get("event_score"), 0.0) or 0.0)
+        residual_score = float(_safe_float(row.get("residual_score"), event_score) or event_score)
+        action = str(row.get("action", ""))
+        src_type = str(row.get("src_type", ""))
+        dst_type = str(row.get("dst_type", ""))
+        info_src = str(row.get("info_src", ""))
+        info_dst = str(row.get("info_dst", ""))
+        cache_like = any(
+            token in f"{info_src} {info_dst}".lower()
+            for token in (
+                "cache",
+                "cache2",
+                "body",
+                "app_webview",
+                "shared_files",
+                "databases",
+                "shared_prefs",
+            )
+        )
+        for key, role_type in (("info_src", src_type), ("info_dst", dst_type)):
+            try:
+                node_id = int(row.get(key, -1))
+            except (TypeError, ValueError):
+                node_id = -1
+            if node_id < 0:
+                continue
+            state = states.setdefault(
+                node_id,
+                {
+                    "event_score_max": 0.0,
+                    "residual_max": 0.0,
+                    "alert_event_count": 0,
+                    "file_cache_read": False,
+                    "file_cache_write": False,
+                    "process_file_read": False,
+                    "process_file_write": False,
+                    "process_process_count": 0,
+                    "netflow_count": 0,
+                    "other_count": 0,
+                },
+            )
+            state["event_score_max"] = max(float(state["event_score_max"]), event_score)
+            state["residual_max"] = max(float(state["residual_max"]), residual_score)
+            state["alert_event_count"] = int(state["alert_event_count"]) + 1
+            if role_type == "netflow":
+                state["netflow_count"] = int(state["netflow_count"]) + 1
+            elif src_type == "process" and dst_type == "process":
+                state["process_process_count"] = int(state["process_process_count"]) + 1
+            else:
+                state["other_count"] = int(state["other_count"]) + 1
+            if src_type == "file" and dst_type == "process" and action in {
+                "EVENT_READ",
+                "EVENT_RECVFROM",
+            }:
+                state["process_file_read"] = True
+                if cache_like:
+                    state["file_cache_read"] = True
+            if src_type == "process" and dst_type == "file" and action == "EVENT_WRITE":
+                state["process_file_write"] = True
+                if cache_like:
+                    state["file_cache_write"] = True
+
+    scores: dict[int, float] = {}
+    for node_id, state in states.items():
+        alert_count = int(state["alert_event_count"])
+        score = 0.45 * max(float(state["residual_max"]), 0.0)
+        score += 0.25 * math.log1p(max(alert_count, 0))
+        cache_read = bool(state["file_cache_read"])
+        cache_write = bool(state["file_cache_write"])
+        if cache_read and cache_write:
+            score += 0.20
+        elif cache_read or cache_write:
+            score += 0.08
+        if bool(state["process_file_read"]) and bool(state["process_file_write"]):
+            score += 0.10
+        event_count = max(alert_count, 1)
+        if int(state["process_process_count"]) == event_count:
+            score -= 0.25
+        if int(state["netflow_count"]) == event_count:
+            score -= 0.10
+        scores[int(node_id)] = float(score)
+    return scores
 
 
 def _phase3g_write_fp_group_outputs(
@@ -1569,16 +1803,33 @@ def _phase3g_write_event_coverage_report(
     idx_to_db_node_id: Mapping[int, int],
     abnormal_db_node_ids: set[int],
     topk_values: Sequence[int],
+    node_pool_score_mode: str = "base_conf",
+    config: SlimConfig | None = None,
 ) -> dict[str, Any]:
     output_dir = Path(output_dir)
+    compact_node_labels = None
+    compact_gt_summary = None
+    if config is not None and is_optc_dataset(getattr(config, "dataset", "")):
+        original_to_canonical = _phase3g_load_optc_original_to_canonical(config)
+        node_id_to_idx = _phase3g_load_node_id_to_idx_for_eval(config)
+        if original_to_canonical:
+            compact_node_labels, compact_gt_summary = _phase3g_compact_gt_labels_for_eval(
+                abnormal_db_node_ids=abnormal_db_node_ids,
+                idx_to_db_node_id=idx_to_db_node_id,
+                original_to_canonical_netflow=original_to_canonical,
+                node_id_to_idx=node_id_to_idx,
+            )
     evaluated_event_rows = []
     for raw_row in _iter_csv_rows(alert_path):
         label, _, _ = _phase3g_label_for_alert_row(
             raw_row,
             idx_to_db_node_id,
             abnormal_db_node_ids,
+            compact_node_labels=compact_node_labels,
         )
-        evaluated_event_rows.append(_evaluated_event_row(raw_row, {int(raw_row["event_index"]): label}))
+        evaluated_event_rows.append(
+            _evaluated_event_row(raw_row, {int(raw_row["event_index"]): label}),
+        )
     coverage = list(coverage_rows or _phase3g_event_node_coverage_from_alerts(alert_path))
     coverage_summary = _phase3g_write_event_node_coverage_outputs(
         output_dir=output_dir,
@@ -1586,6 +1837,8 @@ def _phase3g_write_event_coverage_report(
         event_rows=evaluated_event_rows,
         idx_to_db_node_id=idx_to_db_node_id,
         abnormal_db_node_ids=abnormal_db_node_ids,
+        compact_node_labels=compact_node_labels,
+        compact_gt_summary=compact_gt_summary,
     )
     pool_summary = _phase3g_write_node_pool_rebuilt_outputs(
         output_dir=output_dir,
@@ -1593,6 +1846,10 @@ def _phase3g_write_event_coverage_report(
         idx_to_db_node_id=idx_to_db_node_id,
         abnormal_db_node_ids=abnormal_db_node_ids,
         topk_values=topk_values,
+        node_pool_score_mode=str(node_pool_score_mode),
+        event_rows=evaluated_event_rows,
+        compact_node_labels=compact_node_labels,
+        compact_gt_summary=compact_gt_summary,
     )
     fp_paths = _phase3g_write_fp_group_outputs(
         output_dir=output_dir,
@@ -1600,10 +1857,13 @@ def _phase3g_write_event_coverage_report(
         coverage_rows=[
             {
                 **dict(row),
-                "node_label": "malicious"
-                if int(idx_to_db_node_id.get(int(row.get("node_idx", -1)), -1))
-                in abnormal_db_node_ids
-                else "benign",
+                "node_label": (compact_node_labels or {}).get(
+                    int(row.get("node_idx", -1)),
+                    "malicious"
+                    if int(idx_to_db_node_id.get(int(row.get("node_idx", -1)), -1))
+                    in abnormal_db_node_ids
+                    else "benign",
+                ),
             }
             for row in coverage
         ],
@@ -1644,6 +1904,8 @@ def _phase3g_backfill_result_reports_from_config(
         idx_to_db_node_id=idx_to_db_node_id,
         abnormal_db_node_ids=abnormal_nodes,
         topk_values=_parse_int_list(config.node_pool_topk_values),
+        node_pool_score_mode=str(config.node_pool_score_mode),
+        config=config,
     )
     memory_source = eval_payload if eval_payload else dict(metrics_payload.get("eval", {}))
     rss_payload = _phase3g_write_online_event_core_rss_breakdown(
@@ -1733,7 +1995,7 @@ from scripts.pipeline.features.conditional_context import (
     _write_conditional_endpoint_suppressed_tp_events,
 )
 from scripts.pipeline.io.cache_payloads import _phase3g_load_abnormal_db_nodes_for_eval
-from scripts.pipeline.io.event_artifacts import _phase3e_require_artifacts
+from scripts.pipeline.io.event_artifacts import _phase3e_entity_type_name, _phase3e_require_artifacts
 from scripts.pipeline.outputs.alert_output import (
     _alert_event_indices,
     _attach_node_labels,
@@ -1745,6 +2007,7 @@ from scripts.pipeline.outputs.alert_output import (
     _iter_csv_rows,
     _label_name,
     _node_alert_support,
+    _node_pool_sort_key,
     _node_pool_topk_metrics,
     _parse_int_list,
     _relaxed_node_eval_result,

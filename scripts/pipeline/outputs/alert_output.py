@@ -520,6 +520,13 @@ def _add_node_pool_alert(
             "chains": set(),
             "action_peer_pairs": set(),
             "candidate_event_count": 0,
+            "file_cache_read": False,
+            "file_cache_write": False,
+            "process_file_read": False,
+            "process_file_write": False,
+            "process_process_count": 0,
+            "netflow_count": 0,
+            "other_count": 0,
         },
     )
     state["candidate_scores"].append(float(alert["event_score"]))
@@ -531,6 +538,37 @@ def _add_node_pool_alert(
     else:
         peer_role = str(alert.get("object_type", "unknown"))
     state["action_peer_pairs"].add((str(alert.get("action", "")), peer_role))
+    action = str(alert.get("action", ""))
+    src_type = str(alert.get("src_type", ""))
+    dst_type = str(alert.get("dst_type", ""))
+    info_src = str(alert.get("info_src", ""))
+    info_dst = str(alert.get("info_dst", ""))
+    cache_like = any(
+        token in f"{info_src} {info_dst}".lower()
+        for token in (
+            "cache",
+            "cache2",
+            "body",
+            "app_webview",
+            "shared_files",
+            "databases",
+            "shared_prefs",
+        )
+    )
+    if src_type == "process" and dst_type == "process":
+        state["process_process_count"] = int(state.get("process_process_count", 0)) + 1
+    elif src_type == "netflow" or dst_type == "netflow":
+        state["netflow_count"] = int(state.get("netflow_count", 0)) + 1
+    else:
+        state["other_count"] = int(state.get("other_count", 0)) + 1
+    if src_type == "file" and dst_type == "process" and action in {"EVENT_READ", "EVENT_RECVFROM"}:
+        state["process_file_read"] = True
+        if cache_like:
+            state["file_cache_read"] = True
+    if src_type == "process" and dst_type == "file" and action == "EVENT_WRITE":
+        state["process_file_write"] = True
+        if cache_like:
+            state["file_cache_write"] = True
     _refresh_node_pool_score(state, config)
 
 
@@ -563,6 +601,31 @@ def _node_pool_score(
         return base_conf + repeat_bonus + chain_bonus
     if mode == "base_conf_residual_repeat_chain":
         return base_conf + residual_bonus + repeat_bonus + chain_bonus
+    if mode == "base_conf_v31_support":
+        alert_count = int(state.get("candidate_event_count", 0))
+        score = 0.45 * max(float(state.get("residual_max", 0.0)), 0.0)
+        score += 0.25 * math.log1p(max(alert_count, 0))
+        cache_read = bool(state.get("file_cache_read", False))
+        cache_write = bool(state.get("file_cache_write", False))
+        if cache_read and cache_write:
+            score += 0.20
+        elif cache_read or cache_write:
+            score += 0.08
+        if bool(state.get("process_file_bidirectional", False)) or (
+            bool(state.get("process_file_read", False))
+            and bool(state.get("process_file_write", False))
+        ):
+            score += 0.10
+        event_count = max(alert_count, 1)
+        if bool(state.get("process_process_only", False)) or (
+            int(state.get("process_process_count", 0)) == event_count
+        ):
+            score -= 0.25
+        if bool(state.get("netflow_only", False)) or (
+            int(state.get("netflow_count", 0)) == event_count
+        ):
+            score -= 0.10
+        return float(score)
     if mode == "pool_base":
         return candidate_mass
     if mode == "pool_base_adaptive":

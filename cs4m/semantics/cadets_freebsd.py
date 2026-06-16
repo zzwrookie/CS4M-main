@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 
 
 CADETS_SEMANTIC_RULES_VERSION = "cadets_freebsd_raw_detail_v2"
+CADETS_V3_SAFE_LEXICAL_SEMANTIC_MODE = "cadets_freebsd_raw_detail_v3_safe_lexical"
 
 INTERNAL_ENV_CIDR = ipaddress.IPv4Network("128.55.12.0/24")
 PRIVATE_CIDRS = (
@@ -77,6 +78,17 @@ PAYLOAD_LIKE_BASENAMES = {
     "xdev",
     "memtrace_so",
 }
+HOME_WEB_SUFFIXES = {
+    ".css",
+    ".gif",
+    ".htm",
+    ".html",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".png",
+    ".shtml",
+}
 SHELL_INTERPRETERS = {
     "python",
     "python2",
@@ -99,6 +111,11 @@ SHELL_CONTROL_TOKENS = {"-c", "-e", "-lc", "-l", "&", "&&", "||", "|"}
 def is_cadets_dataset(dataset: object) -> bool:
     """Return true when dataset uses the CADETS FreeBSD semantic policy."""
     return str(dataset or "").upper().startswith("CADETS_")
+
+
+def cadets_semantic_mode_is_v3_safe_lexical(mode: object = "") -> bool:
+    """Return whether a semantic mode requests CADETS FreeBSD v3 safe lexical tokens."""
+    return str(mode or "").strip().lower() == CADETS_V3_SAFE_LEXICAL_SEMANTIC_MODE
 
 
 def normalize_token(value: object, max_len: int = 80) -> str:
@@ -195,6 +212,41 @@ def _process_detail_token(cmd: object) -> str:
         if arg_token:
             return arg_token
     return executable
+
+
+def _looks_payload_shape(token: str) -> bool:
+    value = normalize_token(token, max_len=60)
+    if not value or value in {"unknown", "process_other", "file"}:
+        return False
+    if re.search(r"[a-z]", value) and re.search(r"[0-9]", value):
+        return 5 <= len(value) <= 32
+    if "_" in value and 5 <= len(value) <= 40:
+        return True
+    return False
+
+
+def _looks_path_payload_shape(path: object, detail: str) -> bool:
+    raw = str(path or "").strip().lower()
+    value = normalize_token(detail, max_len=60)
+    if not raw.startswith(("/tmp/", "/var/tmp/", "/usr/home/", "/home/")):
+        return False
+    if PurePosixPath(raw).suffix.lower() == ".lock":
+        return False
+    if _looks_payload_shape(value):
+        return True
+    suffix = PurePosixPath(raw).suffix.lower()
+    return not suffix and bool(re.fullmatch(r"[a-z]{3,12}", value))
+
+
+def _process_other_safe_lexical_role(detail: str) -> str:
+    token = normalize_token(detail, max_len=60)
+    if not token or token == "unknown":
+        return "process_other_generic"
+    if _looks_payload_shape(token):
+        return "process_other_payload_shape"
+    if re.search(r"[0-9]", token) and len(token) >= 5:
+        return "process_other_numeric_shape"
+    return "process_other_named"
 
 
 def _command_token(cmd: object) -> str:
@@ -339,6 +391,22 @@ def freebsd_process_natural_tokens(cmd: object) -> tuple[str, ...]:
     """Return natural CADETS FreeBSD process residual tokens."""
     label = classify_freebsd_process_nll(cmd)
     return ("process", label, freebsd_process_detail(cmd, label))
+
+
+def freebsd_process_natural_tokens_v3_safe_lexical(cmd: object) -> tuple[str, ...]:
+    """Return opt-in CADETS FreeBSD v3 safe lexical process residual tokens."""
+    label = classify_freebsd_process_nll(cmd)
+    detail = freebsd_process_detail(cmd, label)
+    if label != "process_other":
+        return ("process", label, detail)
+    parts = _split_command(cmd)
+    executable = (
+        normalize_token(parts[0].rsplit("/", 1)[-1].lstrip("-"), max_len=60)
+        if parts
+        else detail
+    )
+    refined_detail = executable or detail or "unknown"
+    return ("process", _process_other_safe_lexical_role(refined_detail), refined_detail)
 
 
 def freebsd_file_nll_role() -> str:
@@ -489,6 +557,26 @@ def freebsd_file_natural_tokens(path: object = "") -> tuple[str, ...]:
     return ("file", label, freebsd_file_detail(raw, label))
 
 
+def freebsd_file_natural_tokens_v3_safe_lexical(path: object = "") -> tuple[str, ...]:
+    """Return opt-in CADETS FreeBSD v3 safe lexical file residual tokens."""
+    raw = _valid_file_path(path)
+    if not raw:
+        return ("file",)
+    label = classify_freebsd_file_nll(raw)
+    detail = freebsd_file_detail(raw, label)
+    lowered = raw.lower()
+    if lowered in {"/dev/random", "/dev/urandom"}:
+        return ("file", "device_entropy_file", detail or _basename_token(raw) or "random")
+    if lowered.startswith(("/tmp/", "/var/tmp/")) and _looks_path_payload_shape(raw, detail):
+        return ("file", "tmp_payload_shape_file", detail)
+    if lowered.startswith(("/usr/home/", "/home/")):
+        if PurePosixPath(lowered).suffix in HOME_WEB_SUFFIXES:
+            return ("file", "user_home_web_artifact_file", detail)
+        if _looks_path_payload_shape(raw, detail):
+            return ("file", "user_home_payload_shape_file", detail)
+    return ("file", label, detail)
+
+
 def _parse_ip(value: object) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     text = str(value or "").strip()
     if not text:
@@ -577,3 +665,11 @@ def freebsd_netflow_natural_tokens(dst_addr: object, src_addr: object = "") -> t
     if fallback:
         return ("netflow", fallback)
     return ("netflow",)
+
+
+def freebsd_netflow_natural_tokens_v3_safe_lexical(
+    dst_addr: object,
+    src_addr: object = "",
+) -> tuple[str, ...]:
+    """Return opt-in CADETS FreeBSD v3 netflow tokens, currently identical to v2."""
+    return freebsd_netflow_natural_tokens(dst_addr, src_addr)

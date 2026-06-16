@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -725,6 +726,7 @@ class SSPMLowRankModel:
         epochs: int,
         batch_events: int,
         log_prefix: str = "",
+        profile_callback: Any | None = None,
     ) -> dict[str, Any]:
         """Train from per-epoch row iterators while holding only temporary batch buffers."""
         total_epochs = int(epochs)
@@ -754,10 +756,24 @@ class SSPMLowRankModel:
                 epoch_events += 1
                 train_events_seen_total += 1
                 if len(batch_contexts) >= batch_size:
+                    stack_started = time.perf_counter()
+                    x_batch = np.stack(batch_contexts, axis=0)
+                    y_batch = np.stack(batch_targets, axis=0)
+                    stack_seconds = time.perf_counter() - stack_started
+                    step_started = time.perf_counter()
                     step = self.train_batch_step(
-                        np.stack(batch_contexts, axis=0),
-                        np.stack(batch_targets, axis=0),
+                        x_batch,
+                        y_batch,
                     )
+                    step_seconds = time.perf_counter() - step_started
+                    if profile_callback is not None:
+                        profile_callback(
+                            {
+                                "batch_stack_seconds": float(stack_seconds),
+                                "train_batch_step_seconds": float(step_seconds),
+                                "batch_events": int(x_batch.shape[0]),
+                            },
+                        )
                     batch_contexts = []
                     batch_targets = []
                     if str(step["status"]) != "ok":
@@ -768,10 +784,24 @@ class SSPMLowRankModel:
                     epoch_batches += 1
                     train_batches_total += 1
             if not stopped_early and batch_contexts:
+                stack_started = time.perf_counter()
+                x_batch = np.stack(batch_contexts, axis=0)
+                y_batch = np.stack(batch_targets, axis=0)
+                stack_seconds = time.perf_counter() - stack_started
+                step_started = time.perf_counter()
                 step = self.train_batch_step(
-                    np.stack(batch_contexts, axis=0),
-                    np.stack(batch_targets, axis=0),
+                    x_batch,
+                    y_batch,
                 )
+                step_seconds = time.perf_counter() - step_started
+                if profile_callback is not None:
+                    profile_callback(
+                        {
+                            "batch_stack_seconds": float(stack_seconds),
+                            "train_batch_step_seconds": float(step_seconds),
+                            "batch_events": int(x_batch.shape[0]),
+                        },
+                    )
                 if str(step["status"]) != "ok":
                     stopped_early = True
                     stop_reason = str(step["status"])

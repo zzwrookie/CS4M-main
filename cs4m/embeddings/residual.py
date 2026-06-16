@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+import tempfile
 from typing import Iterable, Protocol, Sequence
 
 import numpy as np
@@ -24,6 +26,7 @@ class ResidualEmbeddingConfig:
     word2vec_workers: int = 4
     word2vec_seed: int = 0
     word2vec_oov_policy: str = "unk"
+    word2vec_corpus_file_dir: str = ""
 
 
 class ResidualEmbedder(Protocol):
@@ -70,6 +73,10 @@ class Word2VecResidualEmbedder:
             raise ModuleNotFoundError(
                 "gensim is required for semantic_embedding_method=word2vec",
             ) from exc
+        if str(self.config.word2vec_corpus_file_dir).strip():
+            self._fit_with_corpus_file(token_sequences)
+            return
+
         corpus: list[list[str]] = []
         vocab: set[str] = set()
         for tokens in token_sequences:
@@ -93,6 +100,52 @@ class Word2VecResidualEmbedder:
             workers=int(self.config.word2vec_workers),
             seed=int(self.config.word2vec_seed),
         )
+
+    def _fit_with_corpus_file(self, token_sequences: Iterable[Sequence[str]]) -> None:
+        """Train Word2Vec from a temporary corpus file to avoid retaining large corpora."""
+        from gensim.models import Word2Vec
+
+        corpus_dir = Path(str(self.config.word2vec_corpus_file_dir)).expanduser()
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+        corpus_path = ""
+        vocab: set[str] = set()
+        sentence_count = 0
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=corpus_dir,
+                prefix="residual_word2vec_",
+                suffix=".txt",
+                delete=False,
+            ) as handle:
+                corpus_path = handle.name
+                for tokens in token_sequences:
+                    sentence = [str(token) for token in tokens][: self.max_tokens]
+                    if not sentence:
+                        sentence = [UNK_TOKEN]
+                    handle.write(" ".join(sentence))
+                    handle.write("\n")
+                    vocab.update(sentence)
+                    sentence_count += 1
+                handle.write(f"{UNK_TOKEN}\n")
+            vocab.add(UNK_TOKEN)
+            self._train_vocab = vocab
+            self._train_sentences = int(sentence_count)
+            self.model = Word2Vec(
+                corpus_file=corpus_path,
+                vector_size=int(self.latent_dim),
+                window=int(self.config.word2vec_window),
+                min_count=int(self.config.word2vec_min_count),
+                sg=int(self.config.word2vec_sg),
+                negative=int(self.config.word2vec_negative),
+                epochs=int(self.config.word2vec_epochs),
+                workers=int(self.config.word2vec_workers),
+                seed=int(self.config.word2vec_seed),
+            )
+        finally:
+            if corpus_path:
+                Path(corpus_path).unlink(missing_ok=True)
 
     def encode(self, tokens: Sequence[str]) -> np.ndarray:
         """Encode one event as mean-pooled train-only Word2Vec vectors."""

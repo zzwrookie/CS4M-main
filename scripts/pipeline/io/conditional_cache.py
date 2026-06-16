@@ -29,6 +29,9 @@ def _phase3g_conditional_memmap_paths(config: SlimConfig) -> dict[str, Path]:
         "x": root / f"X_conditional_{key}.memmap",
         "y": root / f"Y_conditional_{key}.memmap",
         "target_case": root / f"target_case_{key}.memmap",
+        "action_id": root / f"action_id_{key}.memmap",
+        "src_type_id": root / f"src_type_id_{key}.memmap",
+        "dst_type_id": root / f"dst_type_id_{key}.memmap",
         "meta": root / f"conditional_memmap_{key}_meta.json",
     }
 

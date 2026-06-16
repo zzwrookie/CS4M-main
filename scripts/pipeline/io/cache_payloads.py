@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from cs4m.semantics.optc_windows import is_optc_dataset
 from scripts.pipeline.config.runtime_config import *
 
 
@@ -16,8 +17,27 @@ def _phase3g_load_abnormal_db_nodes_for_eval(config: SlimConfig) -> set[int]:
         ]
     elif is_theia_dataset(dataset):
         local_candidates = [Path("ground_truth/E3-THEIA/abnormal_nodes.pkl")]
-    elif is_clearscope_dataset(dataset):
+    elif dataset == "CLEARSCOPE_E3":
         local_candidates = [Path("ground_truth/E3-CLEARSCOPE/abnormal_nodes.pkl")]
+    elif is_optc_dataset(dataset):
+        optc_gt_paths = {
+            "OPTC_051": Path("ground_truth/h051/node_h051_0925.csv"),
+            "OPTC_201": Path("ground_truth/h201/node_h201_0923.csv"),
+            "OPTC_501": Path("ground_truth/h501/node_h501_0924.csv"),
+        }
+        candidate = optc_gt_paths.get(dataset.upper())
+        if candidate is not None and candidate.exists():
+            nodes: set[int] = set()
+            with candidate.open(newline="", encoding="utf-8") as handle:
+                reader = csv.reader(handle)
+                for row in reader:
+                    if len(row) < 3:
+                        continue
+                    try:
+                        nodes.add(int(row[2]))
+                    except (TypeError, ValueError):
+                        continue
+            return nodes
     for candidate in local_candidates:
         if candidate.exists():
             payload = pickle.loads(candidate.read_bytes())
@@ -200,7 +220,7 @@ def model_fingerprint_payload(
             else ""
         ),
         "cadets_semantic_rules_version": (
-            CADETS_SEMANTIC_RULES_VERSION
+            str(values.get("semantic_mode", CADETS_SEMANTIC_RULES_VERSION))
             if is_cadets_dataset(dataset)
             else ""
         ),

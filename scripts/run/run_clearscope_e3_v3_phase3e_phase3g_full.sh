@@ -20,30 +20,56 @@ DATASET="${DATASET:-CLEARSCOPE_E3}"
 SEMANTIC_MODE="${SEMANTIC_MODE:-raw_detail_v3_discriminative}"
 STAGE="${STAGE:-all}"
 DRY_RUN="${DRY_RUN:-0}"
-BASELINE_INFER_OUT_TAG="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_INFER_FULL"
+case "${SEMANTIC_MODE}" in
+    raw_detail_v3_discriminative|clearscope_raw_detail_v3_discriminative)
+        SEMANTIC_LABEL="RAW_DETAIL_V3_DISCRIMINATIVE"
+        SEMANTIC_SUFFIX="v3"
+        SEMANTIC_MODE="raw_detail_v3_discriminative"
+        ;;
+    raw_detail_v31_discriminative|clearscope_raw_detail_v31_discriminative)
+        SEMANTIC_LABEL="RAW_DETAIL_V31_DISCRIMINATIVE"
+        SEMANTIC_SUFFIX="v31"
+        SEMANTIC_MODE="raw_detail_v31_discriminative"
+        ;;
+    raw_detail_v32_discriminative|clearscope_raw_detail_v32_discriminative)
+        SEMANTIC_LABEL="RAW_DETAIL_V32_DISCRIMINATIVE"
+        SEMANTIC_SUFFIX="v32"
+        SEMANTIC_MODE="raw_detail_v32_discriminative"
+        ;;
+    raw_detail_v32_cache_only_discriminative|clearscope_raw_detail_v32_cache_only_discriminative)
+        SEMANTIC_LABEL="RAW_DETAIL_V32_CACHE_ONLY_DISCRIMINATIVE"
+        SEMANTIC_SUFFIX="v32_cache_only"
+        SEMANTIC_MODE="raw_detail_v32_cache_only_discriminative"
+        ;;
+    *)
+        echo "error: unsupported ClearScope semantic mode: ${SEMANTIC_MODE}" >&2
+        exit 2
+        ;;
+esac
+BASELINE_INFER_OUT_TAG="CLEARSCOPE_E3_${SEMANTIC_LABEL}_INFER_FULL"
 RESULT_ROOT="${RESULT_ROOT:-${REPO_ROOT}/outputs/results/tflr_light}"
 PHASE3E_CACHE_ROOT="${PHASE3E_CACHE_ROOT:-${REPO_ROOT}/outputs/cache/phase3e}"
 LOG_DIR="${LOG_DIR:-${REPO_ROOT}/logs/clearscope_e3_v3_phase3e_phase3g}"
 CHECKPOINT_ROOT="${SSPM_BASE_CHECKPOINT_ROOT:-${REPO_ROOT}/outputs/models/sspm_phase3e}"
 ACTION_HEAD_ROOT="${ACTION_HEAD_CHECKPOINT_ROOT:-${REPO_ROOT}/outputs/models/phase3g_action_heads}"
-ACTION_VALIDATION_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_action_validation/${DATASET}_v3"
-ENDPOINT_CACHE_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_endpoint_suppression/${DATASET}_v3"
+ACTION_VALIDATION_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_action_validation/${DATASET}_${SEMANTIC_SUFFIX}"
+ENDPOINT_CACHE_DEFAULT="${REPO_ROOT}/outputs/cache/phase3g_endpoint_suppression/${DATASET}_${SEMANTIC_SUFFIX}"
 ACTION_VALIDATION_CACHE_DIR="${ACTION_VALIDATION_CACHE_DIR:-${ACTION_VALIDATION_DEFAULT}}"
 ENDPOINT_CACHE_DIR="${CONDITIONAL_ENDPOINT_SUPPRESSION_CACHE_DIR:-${ENDPOINT_CACHE_DEFAULT}}"
 
-EMBEDDER_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_LATENT64_word2vec_window3.pkl"
+EMBEDDER_NAME="CLEARSCOPE_E3_${SEMANTIC_LABEL}_LATENT64_word2vec_window3.pkl"
 EMBEDDER_DEFAULT="${REPO_ROOT}/outputs/models/residual_word2vec/${EMBEDDER_NAME}"
 EMBEDDER_PATH="${PRETRAINED_RESIDUAL_EMBEDDER_PATH:-${EMBEDDER_DEFAULT}}"
-NODE_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/node_embeddings/${DATASET}_latent64_v3"
-ACTION_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/action_embeddings/${DATASET}_latent64_v3"
+NODE_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/node_embeddings/${DATASET}_latent64_${SEMANTIC_SUFFIX}"
+ACTION_CACHE_DEFAULT="${PHASE3E_CACHE_ROOT}/action_embeddings/${DATASET}_latent64_${SEMANTIC_SUFFIX}"
 NODE_CACHE_DIR="${NODE_EMBEDDING_CACHE_DIR:-${NODE_CACHE_DEFAULT}}"
 ACTION_CACHE_DIR="${ACTION_EMBEDDING_CACHE_DIR:-${ACTION_CACHE_DEFAULT}}"
-EVENT_INDEX_CACHE_DIR="${EVENT_INDEX_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/event_indices/${DATASET}_v3}"
-COMPACT_USED_NODE_DEFAULT="${PHASE3E_CACHE_ROOT}/compact_used_node_embeddings/${DATASET}_v3"
+EVENT_INDEX_CACHE_DIR="${EVENT_INDEX_CACHE_DIR:-${PHASE3E_CACHE_ROOT}/event_indices/${DATASET}_${SEMANTIC_SUFFIX}}"
+COMPACT_USED_NODE_DEFAULT="${PHASE3E_CACHE_ROOT}/compact_used_node_embeddings/${DATASET}_${SEMANTIC_SUFFIX}"
 COMPACT_USED_NODE_CACHE_DIR="${COMPACT_USED_NODE_CACHE_DIR:-${COMPACT_USED_NODE_DEFAULT}}"
 
-BASE_CHECKPOINT_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3E_BASE_FULL.pkl"
-ACTION_HEAD_NAME="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_PHASE3G_CONDITIONAL_HEAD.pkl"
+BASE_CHECKPOINT_NAME="CLEARSCOPE_E3_${SEMANTIC_LABEL}_PHASE3E_BASE_FULL.pkl"
+ACTION_HEAD_NAME="CLEARSCOPE_E3_${SEMANTIC_LABEL}_PHASE3G_CONDITIONAL_HEAD.pkl"
 BASE_CHECKPOINT_DEFAULT="${CHECKPOINT_ROOT}/${BASE_CHECKPOINT_NAME}"
 ACTION_HEAD_CHECKPOINT_DEFAULT="${ACTION_HEAD_ROOT}/${ACTION_HEAD_NAME}"
 BASE_CHECKPOINT="${SSPM_CHECKPOINT_PATH:-${BASE_CHECKPOINT_DEFAULT}}"
@@ -61,6 +87,9 @@ CONDITIONAL_GROUP_MIN_COUNT="${CONDITIONAL_GROUP_MIN_COUNT:-1000}"
 EVENT_THRESHOLD_MODE="${EVENT_THRESHOLD_MODE:-quantile}"
 EVENT_THRESHOLD_QUANTILE="${EVENT_THRESHOLD_QUANTILE:-0.999}"
 ACTION_TYPE_ALERT_POLICY="${ACTION_TYPE_ALERT_POLICY:-default}"
+NODE_POOL_SCORE_MODE="${NODE_POOL_SCORE_MODE:-base_conf}"
+CLEARSCOPE_V31_FP_GUARD_WRITE_FLOOR="${CLEARSCOPE_V31_FP_GUARD_WRITE_FLOOR:-0.085}"
+CLEARSCOPE_V31_FP_GUARD_READ_FLOOR="${CLEARSCOPE_V31_FP_GUARD_READ_FLOOR:-0.060}"
 CONDITIONAL_LOW_SUPPORT_POLICY="${CONDITIONAL_LOW_SUPPORT_POLICY:-conservative_max}"
 CONDITIONAL_LOW_SUPPORT_MARGIN="${CONDITIONAL_LOW_SUPPORT_MARGIN:-0.05}"
 CONDITIONAL_ENDPOINT_AWARE_SUPPRESSION="${CONDITIONAL_ENDPOINT_AWARE_SUPPRESSION:-false}"
@@ -74,6 +103,9 @@ policy_settings_differ_from_baseline() {
     [[ "${EVENT_THRESHOLD_MODE}" != "quantile" ]] && return 0
     [[ "${EVENT_THRESHOLD_QUANTILE}" != "0.999" ]] && return 0
     [[ "${ACTION_TYPE_ALERT_POLICY}" != "default" ]] && return 0
+    [[ "${NODE_POOL_SCORE_MODE}" != "base_conf" ]] && return 0
+    [[ "${CLEARSCOPE_V31_FP_GUARD_WRITE_FLOOR}" != "0.085" ]] && return 0
+    [[ "${CLEARSCOPE_V31_FP_GUARD_READ_FLOOR}" != "0.060" ]] && return 0
     [[ "${CONDITIONAL_LOW_SUPPORT_POLICY}" != "conservative_max" ]] && return 0
     [[ "${CONDITIONAL_LOW_SUPPORT_MARGIN}" != "0.05" ]] && return 0
     [[ "${CONDITIONAL_ENDPOINT_AWARE_SUPPRESSION}" != "false" ]] && return 0
@@ -125,10 +157,6 @@ preflight() {
         echo "error: this runner is restricted to CLEARSCOPE_E3" >&2
         exit 2
     fi
-    if [[ "${SEMANTIC_MODE}" != "raw_detail_v3_discriminative" ]]; then
-        echo "error: this runner requires SEMANTIC_MODE=raw_detail_v3_discriminative" >&2
-        exit 2
-    fi
     case "${STAGE}" in
         all|build_phase3e_artifacts|train_phase3e_base|train_phase3g_head|infer_full) ;;
         *)
@@ -158,7 +186,7 @@ preflight() {
     if is_true "${DRY_RUN}"; then
         return 0
     fi
-    require_file "${EMBEDDER_PATH}" "ClearScope E3 v3 residual Word2Vec embedder"
+    require_file "${EMBEDDER_PATH}" "ClearScope E3 ${SEMANTIC_SUFFIX} residual Word2Vec embedder"
     if [[ "${STAGE}" == "train_phase3e_base" || "${STAGE}" == "train_phase3g_head" || \
         "${STAGE}" == "infer_full" ]]; then
         require_file "${EVENT_INDEX_CACHE_DIR}/event_index_meta.json" "Phase3E event index meta"
@@ -197,6 +225,9 @@ common_args=(
     --event_threshold_mode "${EVENT_THRESHOLD_MODE}"
     --event_threshold_quantile "${EVENT_THRESHOLD_QUANTILE}"
     --action_type_alert_policy "${ACTION_TYPE_ALERT_POLICY}"
+    --node_pool_score_mode "${NODE_POOL_SCORE_MODE}"
+    --clearscope_v31_fp_guard_write_floor "${CLEARSCOPE_V31_FP_GUARD_WRITE_FLOOR}"
+    --clearscope_v31_fp_guard_read_floor "${CLEARSCOPE_V31_FP_GUARD_READ_FLOOR}"
     --pretrained_residual_embedder_path "${EMBEDDER_PATH}"
     --semantic_embedding_method word2vec
     --semantic_mode "${SEMANTIC_MODE}"
@@ -272,7 +303,7 @@ run_command() {
 }
 
 run_build_phase3e_artifacts() {
-    local out_tag="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_ARTIFACT_FULL"
+    local out_tag="CLEARSCOPE_E3_${SEMANTIC_LABEL}_ARTIFACT_FULL"
     run_command "build_phase3e_artifacts" "${out_tag}" \
         "${common_args[@]}" \
         --out_tag "${out_tag}" \
@@ -281,7 +312,7 @@ run_build_phase3e_artifacts() {
 }
 
 run_train_phase3e_base() {
-    local out_tag="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_BASE_FULL"
+    local out_tag="CLEARSCOPE_E3_${SEMANTIC_LABEL}_BASE_FULL"
     run_command "train_phase3e_base" "${out_tag}" \
         "${common_args[@]}" \
         --out_tag "${out_tag}" \
@@ -293,7 +324,7 @@ run_train_phase3e_base() {
 }
 
 run_train_phase3g_head() {
-    local out_tag="CLEARSCOPE_E3_RAW_DETAIL_V3_DISCRIMINATIVE_HEAD_FULL"
+    local out_tag="CLEARSCOPE_E3_${SEMANTIC_LABEL}_HEAD_FULL"
     run_command "train_phase3g_head" "${out_tag}" \
         "${common_args[@]}" \
         --out_tag "${out_tag}" \

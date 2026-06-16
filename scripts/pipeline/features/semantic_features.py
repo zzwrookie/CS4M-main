@@ -8,6 +8,25 @@ from cs4m.semantics.clearscope_android import (
     clearscope_residual_text_v33b_e5_android_safe,
     clearscope_residual_text_v33_e5_android_safe,
 )
+from cs4m.semantics.optc_windows import (
+    OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE,
+    OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE,
+    is_optc_dataset,
+    optc_residual_text_v1_3_coarse,
+    optc_residual_text_v1_3_detail,
+    optc_residual_text_v1_3b_coarse,
+    optc_residual_text_v1_3b_detail,
+    optc_residual_text_v1_3c_coarse,
+    optc_residual_text_v1_3c_detail,
+    optc_residual_text_v1_coarse,
+    optc_residual_text_v1_detail,
+)
 from scripts.pipeline.config.runtime_config import *
 
 
@@ -350,13 +369,31 @@ def _theia_natural_residual_text(
     return " ".join(str(token) for token in tokens if str(token).strip())
 
 
-def _cadets_natural_node_tokens(row: Mapping[str, Any], side: str) -> tuple[str, ...]:
+def _cadets_natural_node_tokens(
+    row: Mapping[str, Any],
+    side: str,
+    semantic_mode: str = CADETS_SEMANTIC_RULES_VERSION,
+) -> tuple[str, ...]:
     kind = normalize_piece(row.get(f"{side}_kind", ""))
+    use_v3 = cadets_semantic_mode_is_v3_safe_lexical(semantic_mode)
     if kind == "process":
+        if use_v3:
+            return freebsd_process_natural_tokens_v3_safe_lexical(
+                row.get(f"{side}_process_cmd", ""),
+            )
         return freebsd_process_natural_tokens(row.get(f"{side}_process_cmd", ""))
     if kind == "file":
+        if use_v3:
+            return freebsd_file_natural_tokens_v3_safe_lexical(
+                row.get(f"{side}_file_path", ""),
+            )
         return freebsd_file_natural_tokens(row.get(f"{side}_file_path", ""))
     if kind == "netflow":
+        if use_v3:
+            return freebsd_netflow_natural_tokens_v3_safe_lexical(
+                row.get(f"{side}_addr", row.get("dst_addr", row.get("remote_ip", ""))),
+                row.get("src_addr", ""),
+            )
         return freebsd_netflow_natural_tokens(
             row.get(f"{side}_addr", row.get("dst_addr", row.get("remote_ip", ""))),
             row.get("src_addr", ""),
@@ -364,12 +401,15 @@ def _cadets_natural_node_tokens(row: Mapping[str, Any], side: str) -> tuple[str,
     return (kind or "unknown",)
 
 
-def _cadets_natural_residual_text(row: Mapping[str, Any]) -> str:
+def _cadets_natural_residual_text(
+    row: Mapping[str, Any],
+    semantic_mode: str = CADETS_SEMANTIC_RULES_VERSION,
+) -> str:
     action = raw_action_token(row.get("action", "unknown"))
     tokens = [
-        *_cadets_natural_node_tokens(row, "src"),
+        *_cadets_natural_node_tokens(row, "src", semantic_mode),
         action,
-        *_cadets_natural_node_tokens(row, "dst"),
+        *_cadets_natural_node_tokens(row, "dst", semantic_mode),
     ]
     return " ".join(str(token) for token in tokens if str(token).strip())
 
@@ -416,6 +456,23 @@ def residual_text(
     semantic_mode: str = CLEARSCOPE_REFINED_SEMANTIC_MODE,
 ) -> str:
     """Return residual text, using exact IP only for netflow rows."""
+    if is_optc_dataset(dataset):
+        if str(semantic_mode) == OPTC_WINDOWS_V1_DETAIL_SEMANTIC_MODE:
+            return optc_residual_text_v1_detail(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_COARSE_SEMANTIC_MODE:
+            return optc_residual_text_v1_coarse(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3_DETAIL_SEMANTIC_MODE:
+            return optc_residual_text_v1_3_detail(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3_COARSE_SEMANTIC_MODE:
+            return optc_residual_text_v1_3_coarse(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3B_DETAIL_SEMANTIC_MODE:
+            return optc_residual_text_v1_3b_detail(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3B_COARSE_SEMANTIC_MODE:
+            return optc_residual_text_v1_3b_coarse(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3C_DETAIL_SEMANTIC_MODE:
+            return optc_residual_text_v1_3c_detail(row)
+        if str(semantic_mode) == OPTC_WINDOWS_V1_3C_COARSE_SEMANTIC_MODE:
+            return optc_residual_text_v1_3c_coarse(row)
     if is_clearscope_dataset(dataset):
         clearscope_mode = normalize_clearscope_semantic_mode(semantic_mode)
         if clearscope_mode == CLEARSCOPE_LEGACY_SEMANTIC_MODE:
@@ -438,7 +495,7 @@ def residual_text(
     if is_theia_dataset(dataset):
         return _theia_natural_residual_text(row, theia_netflow_policy)
     if is_cadets_dataset(dataset):
-        return _cadets_natural_residual_text(row)
+        return _cadets_natural_residual_text(row, semantic_mode)
     object_kind = normalize_piece(row.get("object_type", "unknown"))
     src_kind = normalize_piece(row.get("src_kind", "process"))
     dst_kind = normalize_piece(row.get("dst_kind", object_kind))

@@ -14,6 +14,7 @@ import json
 import os
 import pickle
 import sys
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -38,10 +39,12 @@ from legacy.compatibility.pipeline_runtime_exports import (
 from scripts.pipeline.io.db_stream import _cfg_for_dataset
 from cs4m.semantics.clearscope_android import (
     CLEARSCOPE_LEGACY_SEMANTIC_MODE,
-    CLEARSCOPE_REFINED_SEMANTIC_MODE,
+    CLEARSCOPE_V3_SEMANTIC_MODE,
     is_clearscope_dataset,
     normalize_clearscope_semantic_mode,
 )
+from cs4m.semantics.cadets_freebsd import is_cadets_dataset
+from cs4m.semantics.optc_windows import is_optc_dataset
 from cs4m.semantics.semantic_router import load_process_semantic_config
 from cs4m.embeddings.residual import build_residual_embedder
 
@@ -62,21 +65,28 @@ def _word2vec_metadata_semantic_payload(
     dataset: str,
 ) -> dict[str, Any]:
     """Return semantic-mode metadata for a residual Word2Vec training run."""
-    raw_mode = str(getattr(args, "semantic_mode", CLEARSCOPE_REFINED_SEMANTIC_MODE))
+    raw_mode = str(getattr(args, "semantic_mode", CLEARSCOPE_V3_SEMANTIC_MODE))
     if is_clearscope_dataset(dataset):
         semantic_mode = normalize_clearscope_semantic_mode(raw_mode)
         legacy_path_used = semantic_mode == CLEARSCOPE_LEGACY_SEMANTIC_MODE
         clearscope_rule = semantic_mode
+        cadets_rule = CADETS_SEMANTIC_RULES_VERSION
+    elif is_cadets_dataset(dataset):
+        semantic_mode = raw_mode
+        legacy_path_used = False
+        clearscope_rule = ""
+        cadets_rule = semantic_mode
     else:
         semantic_mode = raw_mode
         legacy_path_used = False
         clearscope_rule = ""
+        cadets_rule = CADETS_SEMANTIC_RULES_VERSION
     return {
         "semantic_mode": semantic_mode,
         "semantic_rules": {
             "network": NETWORK_SEMANTIC_RULES_VERSION,
             "theia": THEIA_SEMANTIC_RULES_VERSION,
-            "cadets": CADETS_SEMANTIC_RULES_VERSION,
+            "cadets": cadets_rule,
             "clearscope": clearscope_rule,
         },
         "legacy_path_used": bool(legacy_path_used),
@@ -132,6 +142,7 @@ def train_dataset(args: argparse.Namespace, dataset: str) -> dict[str, Any]:
         word2vec_workers=int(args.word2vec_workers),
         word2vec_seed=int(args.word2vec_seed),
         word2vec_oov_policy=str(args.word2vec_oov_policy),
+        word2vec_corpus_file_dir=str(args.word2vec_corpus_file_dir),
         max_tokens_per_node=int(args.max_tokens_per_node),
         fetch_size=int(args.fetch_size),
         progress_interval_events=int(args.progress_interval_events),
@@ -162,6 +173,7 @@ def train_dataset(args: argparse.Namespace, dataset: str) -> dict[str, Any]:
             int(config.fetch_size),
             int(args.max_train_events),
             abnormal_nodes=set(),
+            optc_action_mode=is_optc_dataset(dataset_name),
         )
         print(
             f"[WORD2VEC][{dataset_name}] fit_start "
@@ -276,7 +288,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress_interval_events", type=int, default=100000)
     parser.add_argument("--max_tokens_per_node", type=int, default=8)
     parser.add_argument("--process_semantics_config", default="configs/common/process_semantics.yaml")
-    parser.add_argument("--semantic_mode", default=CLEARSCOPE_REFINED_SEMANTIC_MODE)
+    parser.add_argument("--semantic_mode", default=CLEARSCOPE_V3_SEMANTIC_MODE)
     parser.add_argument("--word2vec_window", type=int, default=3)
     parser.add_argument("--word2vec_min_count", type=int, default=1)
     parser.add_argument("--word2vec_sg", type=int, default=1)
@@ -285,6 +297,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--word2vec_workers", type=int, default=4)
     parser.add_argument("--word2vec_seed", type=int, default=0)
     parser.add_argument("--word2vec_oov_policy", choices=("unk", "zero"), default="unk")
+    parser.add_argument(
+        "--word2vec_corpus_file_dir",
+        default=os.getenv("TMP_ROOT", str(Path(tempfile.gettempdir()) / "cs4m_word2vec")),
+    )
     return parser.parse_args()
 
 

@@ -5,6 +5,188 @@ from __future__ import annotations
 from scripts.pipeline.config.runtime_config import *
 
 
+TRAIN_GROUP_SCORE_SUMMARY_FIELDS = [
+    "target_case",
+    "action",
+    "src_type",
+    "dst_type",
+    "target_case_id",
+    "action_id",
+    "src_type_id",
+    "dst_type_id",
+    "train_count",
+    "train_max_score",
+    "train_p999",
+    "train_p9995",
+    "train_p9999",
+    "score_source",
+]
+
+
+def _phase3g_action_name(action_id: int) -> str:
+    if 0 <= int(action_id) < len(ORTHRUS10_ACTION_NAMES):
+        return str(ORTHRUS10_ACTION_NAMES[int(action_id)])
+    return ""
+
+
+def _phase3g_train_group_summary_rows(
+    *,
+    scores: np.ndarray,
+    target_case_ids: np.ndarray,
+    action_ids: np.ndarray,
+    src_type_ids: np.ndarray,
+    dst_type_ids: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Return train-derived score maxima by target/action/src/dst group."""
+    values = np.asarray(scores, dtype=np.float32)
+    cases = np.asarray(target_case_ids, dtype=np.int16)
+    actions = np.asarray(action_ids, dtype=np.int16)
+    srcs = np.asarray(src_type_ids, dtype=np.int16)
+    dsts = np.asarray(dst_type_ids, dtype=np.int16)
+    if not (values.shape == cases.shape == actions.shape == srcs.shape == dsts.shape):
+        raise ValueError("train group summary arrays must have matching shape")
+
+    grouped: dict[tuple[int, int, int, int], list[float]] = {}
+    for score, case_id, action_id, src_type_id, dst_type_id in zip(
+        values,
+        cases,
+        actions,
+        srcs,
+        dsts,
+    ):
+        key = (int(case_id), int(action_id), int(src_type_id), int(dst_type_id))
+        grouped.setdefault(key, []).append(float(score))
+
+    rows: list[dict[str, Any]] = []
+    for case_id, action_id, src_type_id, dst_type_id in sorted(grouped):
+        group_values = np.asarray(grouped[(case_id, action_id, src_type_id, dst_type_id)])
+        rows.append(
+            {
+                "target_case": TARGET_CASE_ID_TO_NAME.get(int(case_id), f"case_{int(case_id)}"),
+                "action": _phase3g_action_name(int(action_id)),
+                "src_type": _phase3e_entity_type_name("src_type_id", int(src_type_id)),
+                "dst_type": _phase3e_entity_type_name("dst_type_id", int(dst_type_id)),
+                "target_case_id": int(case_id),
+                "action_id": int(action_id),
+                "src_type_id": int(src_type_id),
+                "dst_type_id": int(dst_type_id),
+                "train_count": int(group_values.size),
+                "train_max_score": float(np.max(group_values)),
+                "train_p999": float(np.quantile(group_values, 0.999)),
+                "train_p9995": float(np.quantile(group_values, 0.9995)),
+                "train_p9999": float(np.quantile(group_values, 0.9999)),
+                "score_source": "train_conditional_head_score",
+            },
+        )
+    return rows
+
+
+def _write_phase3g_train_group_score_summary(
+    path: Path,
+    *,
+    scores: np.ndarray,
+    target_case_ids: np.ndarray,
+    action_ids: np.ndarray,
+    src_type_ids: np.ndarray,
+    dst_type_ids: np.ndarray,
+) -> Path:
+    """Write train-derived group score summary used by unified threshold fallback."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = _phase3g_train_group_summary_rows(
+        scores=scores,
+        target_case_ids=target_case_ids,
+        action_ids=action_ids,
+        src_type_ids=src_type_ids,
+        dst_type_ids=dst_type_ids,
+    )
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=TRAIN_GROUP_SCORE_SUMMARY_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {field: row.get(field, "") for field in TRAIN_GROUP_SCORE_SUMMARY_FIELDS},
+            )
+    return output_path
+
+
+def _phase3g_write_train_group_summary_from_memmap(
+    *,
+    output_dir: Path,
+    head: ConditionalSemanticHead,
+    memmap_meta: Mapping[str, Any],
+    batch_events: int,
+) -> Path:
+    """Score train memmap with the trained head and write exact group max summary."""
+    count = int(memmap_meta["num_events"])
+    input_dim = int(memmap_meta["input_dim"])
+    x_map = np.memmap(
+        str(memmap_meta["x_path"]),
+        dtype=np.float32,
+        mode="r",
+        shape=(count, input_dim),
+    )
+    case_map = np.memmap(
+        str(memmap_meta["target_case_path"]),
+        dtype=np.int8,
+        mode="r",
+        shape=(count,),
+    )
+    action_map = np.memmap(
+        str(memmap_meta["action_id_path"]),
+        dtype=np.int16,
+        mode="r",
+        shape=(count,),
+    )
+    src_type_map = np.memmap(
+        str(memmap_meta["src_type_id_path"]),
+        dtype=np.int16,
+        mode="r",
+        shape=(count,),
+    )
+    dst_type_map = np.memmap(
+        str(memmap_meta["dst_type_id_path"]),
+        dtype=np.int16,
+        mode="r",
+        shape=(count,),
+    )
+    y_map = np.memmap(
+        str(memmap_meta["y_path"]),
+        dtype=np.float32,
+        mode="r",
+        shape=(count, int(memmap_meta["output_dim"])),
+    )
+    scores = np.zeros((count,), dtype=np.float32)
+    chunk_size = max(int(batch_events), 1)
+    for start in range(0, count, chunk_size):
+        end = min(start + chunk_size, count)
+        contexts = np.asarray(x_map[start:end], dtype=np.float32)
+        cases = np.asarray(case_map[start:end], dtype=np.int8)
+        targets = np.asarray(y_map[start:end], dtype=np.float32)
+        predictions = head.predict(
+            contexts,
+            target_case_ids=cases if head.is_dual_head else None,
+        )
+        pred_norm = predictions / np.maximum(
+            np.linalg.norm(predictions, axis=1, keepdims=True),
+            1e-8,
+        )
+        target_norm = targets / np.maximum(
+            np.linalg.norm(targets, axis=1, keepdims=True),
+            1e-8,
+        )
+        scores[start:end] = 1.0 - np.sum(pred_norm * target_norm, axis=1)
+
+    return _write_phase3g_train_group_score_summary(
+        Path(output_dir) / "train_group_score_summary.csv",
+        scores=scores,
+        target_case_ids=np.asarray(case_map),
+        action_ids=np.asarray(action_map),
+        src_type_ids=np.asarray(src_type_map),
+        dst_type_ids=np.asarray(dst_type_map),
+    )
+
+
 def _phase3g_build_conditional_train_memmap(
     *,
     config: SlimConfig,
@@ -37,7 +219,7 @@ def _phase3g_build_conditional_train_memmap(
             input_dim=input_dim,
             output_dim=output_dim,
         )
-        for key in ("x", "y", "target_case"):
+        for key in ("x", "y", "target_case", "action_id", "src_type_id", "dst_type_id"):
             if not memmap_paths[key].exists():
                 raise FileNotFoundError(f"conditional memmap sidecar missing: {memmap_paths[key]}")
         return dict(existing)
@@ -68,6 +250,24 @@ def _phase3g_build_conditional_train_memmap(
     case_map = np.memmap(
         memmap_paths["target_case"],
         dtype=np.int8,
+        mode="w+",
+        shape=(count,),
+    )
+    action_map = np.memmap(
+        memmap_paths["action_id"],
+        dtype=np.int16,
+        mode="w+",
+        shape=(count,),
+    )
+    src_type_map = np.memmap(
+        memmap_paths["src_type_id"],
+        dtype=np.int16,
+        mode="w+",
+        shape=(count,),
+    )
+    dst_type_map = np.memmap(
+        memmap_paths["dst_type_id"],
+        dtype=np.int16,
         mode="w+",
         shape=(count,),
     )
@@ -104,6 +304,9 @@ def _phase3g_build_conditional_train_memmap(
             x_map[offset] = context
             y_map[offset] = target
             case_map[offset] = np.int8(target_case_id(target_case))
+            action_map[offset] = np.int16(int(row["action_id"]))
+            src_type_map[offset] = np.int16(int(row["src_type_id"]))
+            dst_type_map[offset] = np.int16(int(row["dst_type_id"]))
             target_case_counts[target_case] = target_case_counts.get(target_case, 0) + 1
             action = str(ORTHRUS10_ACTION_NAMES[int(row["action_id"])])
             update_residual_score = 0.0
@@ -137,6 +340,9 @@ def _phase3g_build_conditional_train_memmap(
     x_map.flush()
     y_map.flush()
     case_map.flush()
+    action_map.flush()
+    src_type_map.flush()
+    dst_type_map.flush()
     elapsed = float(time.perf_counter() - started)
     meta = {
         "schema": "phase3g_conditional_train_memmap_v1",
@@ -149,9 +355,15 @@ def _phase3g_build_conditional_train_memmap(
         "x_path": str(memmap_paths["x"]),
         "y_path": str(memmap_paths["y"]),
         "target_case_path": str(memmap_paths["target_case"]),
+        "action_id_path": str(memmap_paths["action_id"]),
+        "src_type_id_path": str(memmap_paths["src_type_id"]),
+        "dst_type_id_path": str(memmap_paths["dst_type_id"]),
         "x_size_mb": float(memmap_paths["x"].stat().st_size / 1024.0 / 1024.0),
         "y_size_mb": float(memmap_paths["y"].stat().st_size / 1024.0 / 1024.0),
         "target_case_size_mb": float(memmap_paths["target_case"].stat().st_size / 1024.0 / 1024.0),
+        "action_id_size_mb": float(memmap_paths["action_id"].stat().st_size / 1024.0 / 1024.0),
+        "src_type_id_size_mb": float(memmap_paths["src_type_id"].stat().st_size / 1024.0 / 1024.0),
+        "dst_type_id_size_mb": float(memmap_paths["dst_type_id"].stat().st_size / 1024.0 / 1024.0),
         "build_time_sec": elapsed,
         "build_events_per_sec": float(count / max(elapsed, 1e-9)),
         "build_rss_peak_mb": float(rss_peak),
@@ -795,6 +1007,17 @@ def run_phase3g_conditional_train_from_precompute(config: SlimConfig) -> Path:
             "SSPM_CONDITIONAL_TRAIN_DATA_MODE=memmap; stream_event must be explicit",
         )
     checkpoint_path = _phase3g_resolved_head_checkpoint_path(config)
+    train_group_score_summary_path = ""
+    if conditional_memmap_meta is not None:
+        train_group_score_summary_path = str(
+            _phase3g_write_train_group_summary_from_memmap(
+                output_dir=output_dir,
+                head=head,
+                memmap_meta=conditional_memmap_meta,
+                batch_events=int(config.sspm_torch_batch_events),
+            ),
+        )
+        train_stats["train_group_score_summary_csv"] = train_group_score_summary_path
     target_case_mode = (
         "action_embedding_only"
         if str(config.sspm_score_head) == CONDITIONAL_ACTION_EMBEDDING_SCORE_HEAD
@@ -840,6 +1063,7 @@ def run_phase3g_conditional_train_from_precompute(config: SlimConfig) -> Path:
                 ),
             )
         ),
+        "train_group_score_summary_csv": train_group_score_summary_path,
         "train_stats": train_stats,
     }
     target_case_path_for_fp = str(train_stats.get("conditional_memmap_target_case_path", ""))
@@ -886,6 +1110,7 @@ def run_phase3g_conditional_train_from_precompute(config: SlimConfig) -> Path:
             "output_dim": int(config.sspm_target_dim),
             "fingerprint": checkpoint_fingerprint,
             "train_stats": train_stats,
+            "train_group_score_summary_csv": train_group_score_summary_path,
         },
         "train_events_actual": int(train_count),
         "validation_events_actual": int(validation_count),
@@ -942,6 +1167,7 @@ from scripts.pipeline.io.conditional_cache import (
     _phase3g_validate_conditional_memmap,
 )
 from scripts.pipeline.io.event_artifacts import (
+    _phase3e_entity_type_name,
     _phase3e_event_index_array,
     _phase3e_open_split_event_index,
     _phase3e_train_lr,

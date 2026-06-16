@@ -27,7 +27,8 @@ def _action_type_alert_policy_decision(
     if policy not in ACTION_TYPE_ALERT_POLICIES:
         raise ValueError(
             "ACTION_TYPE_ALERT_POLICY must be default, theia_v1, "
-            "cadets_e4_v2_group_v1, clearscope_node_pair_v1, "
+            "cadets_e4_v2_group_v1, cadets_e4_v3_policy_smoke_v1, "
+            "clearscope_node_pair_v1, "
             "clearscope_android_v2, clearscope_v31_fp_guard_v1, "
             "clearscope_v31_fp_guard_v2, clearscope_v31_fp_guard_v3, "
             "clearscope_v31_fp_guard_v3b, or clearscope_v31_fp_guard_v3c",
@@ -254,6 +255,44 @@ def _action_type_alert_policy_decision(
         demoted_to_evidence = {
             ("EVENT_CONNECT", "process", "netflow"),
             ("EVENT_WRITE", "process", "netflow"),
+        }
+        if group in high_priority:
+            return {
+                "policy_name": policy,
+                "alert_decision": "event_alert",
+                "alert_priority": "high",
+                "final_alert": True,
+                "node_evidence": False,
+                "budget_capped": False,
+            }
+        if group in demoted_to_evidence:
+            return {
+                "policy_name": policy,
+                "alert_decision": "demoted_event",
+                "alert_priority": "node_evidence",
+                "final_alert": False,
+                "node_evidence": True,
+                "budget_capped": False,
+            }
+        return {
+            "policy_name": policy,
+            "alert_decision": "event_alert",
+            "alert_priority": "default",
+            "final_alert": True,
+            "node_evidence": False,
+            "budget_capped": False,
+        }
+
+    if policy == "cadets_e4_v3_policy_smoke_v1":
+        high_priority = {
+            ("EVENT_CONNECT", "process", "netflow"),
+            ("EVENT_RECVFROM", "netflow", "process"),
+        }
+        demoted_to_evidence = {
+            ("EVENT_CONNECT", "process", "file"),
+            ("EVENT_SENDTO", "process", "file"),
+            ("EVENT_SENDMSG", "process", "file"),
+            ("EVENT_RECVMSG", "file", "process"),
         }
         if group in high_priority:
             return {
@@ -1081,7 +1120,6 @@ def _phase3g_conditional_fingerprint(
             head_checkpoint_fingerprint.get("schema", head.fingerprint().get("schema", "")),
         ),
     )
-    run_only = _phase3g_run_only_from_out_tag(config.out_tag)
     fingerprint = {
         "schema": "phase3g_conditional_validation_cache_v1",
         "score_head": str(config.sspm_score_head),
@@ -1102,9 +1140,6 @@ def _phase3g_conditional_fingerprint(
         ),
         "target_case_logic": "state_exists_event_semantic_else_both_cold_action",
         "dataset": str(config.dataset),
-        "RUN_ONLY": run_only,
-        "run_only": run_only,
-        "run": str(config.out_tag),
         "split": str(split),
         "event_index_fingerprint": event_index_fingerprint(_phase3e_event_index_array(event_index)),
         "source_split_event_index_fingerprint": split_meta.get("event_index_fingerprint")
